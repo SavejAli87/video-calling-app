@@ -2,7 +2,7 @@ import React, { useState, useEffect, useRef, useCallback } from "react";
 import { io } from "socket.io-client";
 
 // .trim() laga kar kisi bhi accidental space ko sanitize kiya gaya hai
-const RAW_URL = import.meta.env.VITE_SIGNALING_URL || "https://superleniently-unattributive-alondra.ngrok-free.dev";
+const RAW_URL = import.meta.env.VITE_SIGNALING_URL || "https://13.63.215.171:9090/";
 const SERVER_URL = RAW_URL.trim();
 
 // STUN + TURN Server Configuration (Cleaned Credentials)
