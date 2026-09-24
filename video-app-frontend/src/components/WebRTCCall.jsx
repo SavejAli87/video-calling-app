@@ -1,11 +1,9 @@
 import React, { useState, useEffect, useRef, useCallback } from "react";
 import { io } from "socket.io-client";
 
-// .trim() laga kar kisi bhi accidental space ko sanitize kiya gaya hai
-const RAW_URL = import.meta.env.VITE_SIGNALING_URL || "https://13.63.215.171:9090/";
-const SERVER_URL = RAW_URL.trim();
+const RAW_URL = import.meta.env.VITE_SIGNALING_URL || "http://13.63.215.171:9090";
+const SERVER_URL = RAW_URL.trim().replace(/\/+$/, "");
 
-// STUN + TURN Server Configuration (Cleaned Credentials)
 const RTC_CONFIG = {
   iceServers: [
     { urls: "stun:stun.l.google.com:19302" },
@@ -31,14 +29,16 @@ const RTC_CONFIG = {
 
 const WebRTCCall = () => {
   const [socketId, setSocketId] = useState("Connecting to server...");
+  const [isConnected, setIsConnected] = useState(false);
   const [deviceName, setDeviceName] = useState("");
-  const [status, setStatus] = useState("🟡 Connecting...");
+  const [status, setStatus] = useState("🟡 Connecting to signaling server...");
   const [devices, setDevices] = useState([]);
   const [inCall, setInCall] = useState(false);
 
   const socketRef = useRef(null);
   const peerRef = useRef(null);
   const localStreamRef = useRef(null);
+  const remoteStreamRef = useRef(null);
   const currentTargetRef = useRef(null);
   const remoteDescriptionSetRef = useRef(false);
   const pendingIceCandidatesRef = useRef([]);
@@ -46,9 +46,11 @@ const WebRTCCall = () => {
   const localVideoRef = useRef(null);
   const remoteVideoRef = useRef(null);
 
-  // Call cleanup
+  // Call Cleanup
   const cleanupCall = useCallback(() => {
     if (peerRef.current) {
+      peerRef.current.onicecandidate = null;
+      peerRef.current.ontrack = null;
       peerRef.current.close();
       peerRef.current = null;
     }
@@ -56,6 +58,11 @@ const WebRTCCall = () => {
     if (localStreamRef.current) {
       localStreamRef.current.getTracks().forEach((track) => track.stop());
       localStreamRef.current = null;
+    }
+
+    if (remoteStreamRef.current) {
+      remoteStreamRef.current.getTracks().forEach((track) => track.stop());
+      remoteStreamRef.current = null;
     }
 
     if (localVideoRef.current) localVideoRef.current.srcObject = null;
@@ -69,33 +76,54 @@ const WebRTCCall = () => {
     setStatus("🟢 Ready for another call");
   }, []);
 
-  // Flush queued ICE candidates
+  // Flush Queued ICE Candidates
   const flushPendingIceCandidates = useCallback(async () => {
     if (!peerRef.current || !remoteDescriptionSetRef.current) return;
 
-    for (const candidate of pendingIceCandidatesRef.current) {
+    while (pendingIceCandidatesRef.current.length > 0) {
+      const candidate = pendingIceCandidatesRef.current.shift();
       try {
         await peerRef.current.addIceCandidate(candidate);
       } catch (error) {
         console.error("Queued ICE error:", error);
       }
     }
-    pendingIceCandidatesRef.current = [];
   }, []);
 
-  // Camera aur Mic access
+  // Camera & Mic Access
   const startCamera = useCallback(async () => {
     if (localStreamRef.current) return localStreamRef.current;
 
+    const getMedia =
+      navigator.mediaDevices?.getUserMedia?.bind(navigator.mediaDevices) ||
+      navigator.getUserMedia?.bind(navigator) ||
+      navigator.webkitGetUserMedia?.bind(navigator) ||
+      navigator.mozGetUserMedia?.bind(navigator);
+
+    if (!getMedia) {
+      const errorMsg =
+        "Camera/Microphone API blocked!\n\n" +
+        "Browsers block camera access over plain HTTP (unless using http://localhost).\n\n" +
+        "Solutions:\n" +
+        "1. Open using http://localhost:5173\n" +
+        "2. Or enable chrome://flags/#unsafely-treat-insecure-origin-as-secure for your IP";
+      alert(errorMsg);
+      throw new Error(errorMsg);
+    }
+
     try {
-      const stream = await navigator.mediaDevices.getUserMedia({
+      const constraints = {
         video: {
           width: { ideal: 1280 },
           height: { ideal: 720 },
           facingMode: "user",
         },
         audio: true,
-      });
+      };
+
+      const stream = navigator.mediaDevices?.getUserMedia
+        ? await navigator.mediaDevices.getUserMedia(constraints)
+        : await new Promise((resolve, reject) => getMedia(constraints, resolve, reject));
 
       localStreamRef.current = stream;
       if (localVideoRef.current) {
@@ -105,34 +133,59 @@ const WebRTCCall = () => {
       return stream;
     } catch (error) {
       console.error("Camera/Mic Error:", error);
-      alert("Camera/Microphone permission required.\n\n" + error.message);
+      alert("Camera/Microphone permission denied or unavailable:\n\n" + error.message);
       throw error;
     }
   }, []);
 
-  // RTCPeerConnection setup with STUN & TURN
+  // Local tracks peer connection me add karna
+  const addLocalTracks = useCallback((peer, stream) => {
+    if (!peer || !stream) return;
+
+    const existingTrackIds = new Set(
+      peer.getSenders().map((s) => s.track?.id).filter(Boolean)
+    );
+
+    stream.getTracks().forEach((track) => {
+      if (!existingTrackIds.has(track.id)) {
+        peer.addTrack(track, stream);
+      }
+    });
+  }, []);
+
+  // Peer Connection Setup
   const createPeer = useCallback(() => {
     if (peerRef.current) {
       peerRef.current.close();
     }
 
     const peer = new RTCPeerConnection(RTC_CONFIG);
+    remoteStreamRef.current = new MediaStream();
 
+    if (remoteVideoRef.current) {
+      remoteVideoRef.current.srcObject = remoteStreamRef.current;
+    }
+
+    // Remote Track Receiver Fix
     peer.ontrack = (event) => {
-      if (remoteVideoRef.current) {
-        if (event.streams && event.streams[0]) {
+      if (event.streams && event.streams[0]) {
+        if (remoteVideoRef.current) {
           remoteVideoRef.current.srcObject = event.streams[0];
-        } else {
-          const stream = remoteVideoRef.current.srcObject || new MediaStream();
-          stream.addTrack(event.track);
-          remoteVideoRef.current.srcObject = stream;
+          remoteStreamRef.current = event.streams[0];
         }
-        remoteVideoRef.current.play().catch((err) => console.log("Remote autoplay:", err));
+      } else {
+        remoteStreamRef.current.addTrack(event.track);
+        if (remoteVideoRef.current) {
+          remoteVideoRef.current.srcObject = remoteStreamRef.current;
+        }
       }
+
+      remoteVideoRef.current?.play().catch((err) => console.log("Remote play error:", err));
     };
 
+    // Candidate Sending
     peer.onicecandidate = (event) => {
-      if (event.candidate && currentTargetRef.current && socketRef.current) {
+      if (event.candidate && currentTargetRef.current && socketRef.current?.connected) {
         socketRef.current.emit("ice-candidate", {
           targetSocketId: currentTargetRef.current,
           candidate: event.candidate,
@@ -161,27 +214,13 @@ const WebRTCCall = () => {
         setStatus("🟢 Media connection established");
       }
       if (iceState === "failed") {
-        setStatus("🔴 ICE failed - NAT traversal blocked");
+        setStatus("🔴 ICE failed - Relay connection dropped");
       }
     };
 
     peerRef.current = peer;
     return peer;
   }, [cleanupCall]);
-
-  const addLocalTracks = useCallback(() => {
-    if (!peerRef.current || !localStreamRef.current) return;
-
-    const existingTrackIds = new Set(
-      peerRef.current.getSenders().map((s) => s.track?.id).filter(Boolean)
-    );
-
-    localStreamRef.current.getTracks().forEach((track) => {
-      if (!existingTrackIds.has(track.id)) {
-        peerRef.current.addTrack(track, localStreamRef.current);
-      }
-    });
-  }, []);
 
   // Socket Lifecycle
   useEffect(() => {
@@ -193,33 +232,42 @@ const WebRTCCall = () => {
     const devName = "Device-" + devId.slice(-5).toUpperCase();
     setDeviceName(devName);
 
-    // Ngrok free tier browser warning bypass header
+    const isSecureUrl = SERVER_URL.startsWith("https");
+
     const socket = io(SERVER_URL, {
-      transports: ["websocket", "polling"],
-      secure: true,
-      reconnectionAttempts: 5,
-      extraHeaders: {
-        "ngrok-skip-browser-warning": "true",
-      },
+      transports: ["polling", "websocket"],
+      secure: isSecureUrl,
+      reconnectionAttempts: 10,
+      reconnectionDelay: 1000,
     });
+
     socketRef.current = socket;
 
     socket.on("connect", () => {
       setSocketId(socket.id);
-      setStatus("🟢 Connected");
+      setIsConnected(true);
+      setStatus("🟢 Connected to signaling server");
 
       socket.emit("register-device", { deviceId: devId, deviceName: devName });
       socket.emit("get-devices");
     });
 
-    socket.on("disconnect", () => {
-      setStatus("🔴 Disconnected from server");
+    socket.on("disconnect", (reason) => {
+      setIsConnected(false);
+      setStatus(`🔴 Disconnected from server (${reason})`);
+    });
+
+    socket.on("connect_error", (err) => {
+      setIsConnected(false);
+      setStatus("🔴 Connection failed (Check AWS port 9090 & HTTP mode)");
+      console.error("Socket error details:", err.message);
     });
 
     socket.on("device-list", (deviceList) => {
       setDevices(deviceList);
     });
 
+    // Incoming Call Receiver
     socket.on("incoming-call", async (data) => {
       if (currentTargetRef.current) {
         socket.emit("call-rejected", { targetSocketId: data.callerSocketId });
@@ -234,26 +282,37 @@ const WebRTCCall = () => {
         return;
       }
 
-      currentTargetRef.current = data.callerSocketId;
-      setInCall(true);
-      setStatus("📞 Call accepted. Connecting...");
-
-      remoteDescriptionSetRef.current = false;
-      pendingIceCandidatesRef.current = [];
-      createPeer();
-
-      socket.emit("call-accepted", { targetSocketId: data.callerSocketId });
-    });
-
-    socket.on("call-accepted", async (data) => {
       try {
-        currentTargetRef.current = data.targetSocketId;
-        await startCamera();
+        currentTargetRef.current = data.callerSocketId;
+        setInCall(true);
+        setStatus("📞 Call accepted. Starting camera...");
+
+        // Pehle Camera start hoga taaki remote offer aane se pehle tracks available hon
+        const localStream = await startCamera();
 
         remoteDescriptionSetRef.current = false;
         pendingIceCandidatesRef.current = [];
         const peer = createPeer();
-        addLocalTracks();
+        addLocalTracks(peer, localStream);
+
+        socket.emit("call-accepted", { targetSocketId: data.callerSocketId });
+      } catch (err) {
+        console.error("Camera accept error:", err);
+        socket.emit("call-rejected", { targetSocketId: data.callerSocketId });
+        cleanupCall();
+      }
+    });
+
+    // Caller Side (Jab receiver accept karta hai)
+    socket.on("call-accepted", async (data) => {
+      try {
+        currentTargetRef.current = data.targetSocketId;
+        const localStream = await startCamera();
+
+        remoteDescriptionSetRef.current = false;
+        pendingIceCandidatesRef.current = [];
+        const peer = createPeer();
+        addLocalTracks(peer, localStream);
 
         const offer = await peer.createOffer({
           offerToReceiveAudio: true,
@@ -268,15 +327,16 @@ const WebRTCCall = () => {
 
         setStatus("📞 Connecting video call...");
       } catch (err) {
-        console.error("Call error:", err);
+        console.error("Call offer creation error:", err);
         cleanupCall();
       }
     });
 
+    // Receiver Answer Handler
     socket.on("offer", async (data) => {
       try {
         currentTargetRef.current = data.callerSocketId;
-        await startCamera();
+        const localStream = await startCamera();
 
         let peer = peerRef.current;
         if (!peer) {
@@ -285,7 +345,7 @@ const WebRTCCall = () => {
           peer = createPeer();
         }
 
-        addLocalTracks();
+        addLocalTracks(peer, localStream);
         await peer.setRemoteDescription(new RTCSessionDescription(data.offer));
         remoteDescriptionSetRef.current = true;
         await flushPendingIceCandidates();
@@ -305,6 +365,7 @@ const WebRTCCall = () => {
       }
     });
 
+    // Caller Answer Receiver
     socket.on("answer", async (data) => {
       try {
         if (!peerRef.current) return;
@@ -316,6 +377,7 @@ const WebRTCCall = () => {
       }
     });
 
+    // ICE Candidate Handler
     socket.on("ice-candidate", async (data) => {
       try {
         const candidate = new RTCIceCandidate(data.candidate);
@@ -344,27 +406,29 @@ const WebRTCCall = () => {
       alert("📴 Remote device ended the call.");
     });
 
-    socket.on("connect_error", (err) => {
-      console.error("Socket connection error:", err);
-      setStatus("🔴 Connection failed (Check Ngrok tunnel status)");
-    });
-
     return () => {
       cleanupCall();
       socket.disconnect();
     };
   }, [createPeer, addLocalTracks, startCamera, cleanupCall, flushPendingIceCandidates]);
 
+  // Safe Call Device Trigger
   const handleCallDevice = (targetSocketId) => {
+    if (!socketRef.current || !socketRef.current.connected) {
+      alert("⚠️ Server connection lost. Please wait until status shows 🟢 Connected.");
+      return;
+    }
     if (inCall) return;
+
     currentTargetRef.current = targetSocketId;
     setInCall(true);
     setStatus("📞 Calling device...");
     socketRef.current.emit("call-device", { targetSocketId });
   };
 
+  // Safe End Call Trigger
   const handleEndCall = () => {
-    if (currentTargetRef.current && socketRef.current) {
+    if (currentTargetRef.current && socketRef.current?.connected) {
       socketRef.current.emit("end-call", {
         targetSocketId: currentTargetRef.current,
       });
@@ -400,7 +464,7 @@ const WebRTCCall = () => {
             <div className="text-neutral-400 p-6 bg-neutral-800/50 rounded-xl border border-dashed border-neutral-700">
               No other devices connected.
               <br />
-              Open this app on another network or mobile data using the same URL.
+              Open this app on another tab or device pointing to the same server URL.
             </div>
           ) : (
             otherDevices.map((device) => (
@@ -415,7 +479,7 @@ const WebRTCCall = () => {
                 </small>
 
                 <button
-                  disabled={inCall || device.status === "busy"}
+                  disabled={inCall || device.status === "busy" || !isConnected}
                   onClick={() => handleCallDevice(device.socketId)}
                   className="w-full mt-auto py-2 px-4 bg-emerald-600 hover:bg-emerald-700 disabled:opacity-40 disabled:cursor-not-allowed text-white font-semibold rounded-lg transition-colors cursor-pointer"
                 >

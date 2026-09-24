@@ -1,12 +1,12 @@
-import { defineConfig } from 'vite'
-import react from '@vitejs/plugin-react'
-import basicSsl from '@vitejs/plugin-basic-ssl'
-import tailwindcss from '@tailwindcss/vite'
+import { defineConfig } from 'vite';
+import react from '@vitejs/plugin-react';
+import tailwindcss from '@tailwindcss/vite';
 
 export default defineConfig({
-  plugins: [react(), basicSsl(), tailwindcss(),],
+  plugins: [react(), tailwindcss()], // basicSsl() yahan nahi hona chahiye
   server: {
-    host: true, // Sabhi devices ke liye expose karega
-    port: 5173
-  }
-})
+    host: true,
+    port: 5173,
+    https: false,
+  },
+});
