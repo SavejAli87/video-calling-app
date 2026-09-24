@@ -1,8 +1,12 @@
 import React, { useState, useEffect, useRef, useCallback } from "react";
 import { io } from "socket.io-client";
 
-const RAW_URL = import.meta.env.VITE_SIGNALING_URL || "http://13.63.215.171:9090";
-const SERVER_URL = RAW_URL.trim().replace(/\/+$/, "");
+// Netlify par auto same-origin (Proxy ke liye) aur Localhost par seedha EC2 IP
+const BACKEND_URL = "http://13.63.215.171:9090";
+const SERVER_URL =
+  typeof window !== "undefined" && window.location.hostname !== "localhost"
+    ? window.location.origin
+    : import.meta.env.VITE_SIGNALING_URL || BACKEND_URL;
 
 const RTC_CONFIG = {
   iceServers: [
@@ -105,8 +109,8 @@ const WebRTCCall = () => {
         "Camera/Microphone API blocked!\n\n" +
         "Browsers block camera access over plain HTTP (unless using http://localhost).\n\n" +
         "Solutions:\n" +
-        "1. Open using http://localhost:5173\n" +
-        "2. Or enable chrome://flags/#unsafely-treat-insecure-origin-as-secure for your IP";
+        "1. Open using HTTPS (e.g. your Netlify URL)\n" +
+        "2. Open using http://localhost:5173";
       alert(errorMsg);
       throw new Error(errorMsg);
     }
@@ -166,7 +170,7 @@ const WebRTCCall = () => {
       remoteVideoRef.current.srcObject = remoteStreamRef.current;
     }
 
-    // Remote Track Receiver Fix
+    // Remote Track Receiver
     peer.ontrack = (event) => {
       if (event.streams && event.streams[0]) {
         if (remoteVideoRef.current) {
@@ -232,11 +236,9 @@ const WebRTCCall = () => {
     const devName = "Device-" + devId.slice(-5).toUpperCase();
     setDeviceName(devName);
 
-    const isSecureUrl = SERVER_URL.startsWith("https");
-
     const socket = io(SERVER_URL, {
+      path: "/socket.io",
       transports: ["polling", "websocket"],
-      secure: isSecureUrl,
       reconnectionAttempts: 10,
       reconnectionDelay: 1000,
     });
@@ -259,7 +261,7 @@ const WebRTCCall = () => {
 
     socket.on("connect_error", (err) => {
       setIsConnected(false);
-      setStatus("🔴 Connection failed (Check AWS port 9090 & HTTP mode)");
+      setStatus("🔴 Connection failed (Check Netlify proxy / EC2 backend)");
       console.error("Socket error details:", err.message);
     });
 
@@ -287,7 +289,6 @@ const WebRTCCall = () => {
         setInCall(true);
         setStatus("📞 Call accepted. Starting camera...");
 
-        // Pehle Camera start hoga taaki remote offer aane se pehle tracks available hon
         const localStream = await startCamera();
 
         remoteDescriptionSetRef.current = false;
@@ -303,7 +304,7 @@ const WebRTCCall = () => {
       }
     });
 
-    // Caller Side (Jab receiver accept karta hai)
+    // Caller Side
     socket.on("call-accepted", async (data) => {
       try {
         currentTargetRef.current = data.targetSocketId;
@@ -464,7 +465,7 @@ const WebRTCCall = () => {
             <div className="text-neutral-400 p-6 bg-neutral-800/50 rounded-xl border border-dashed border-neutral-700">
               No other devices connected.
               <br />
-              Open this app on another tab or device pointing to the same server URL.
+              Open this Netlify URL on another device or mobile phone.
             </div>
           ) : (
             otherDevices.map((device) => (
