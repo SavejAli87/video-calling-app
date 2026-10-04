@@ -2,8 +2,8 @@ import React, { useState, useEffect, useRef, useCallback } from "react";
 import { io } from "socket.io-client";
 
 // Netlify par auto same-origin (Proxy ke liye) aur Localhost par seedha EC2 IP
-// const BACKEND_URL = "http://13.63.215.171:9090";  // AWS backend host URL 
-const BACKEND_URL = "https://video-calling-app-bh65.vercel.app/"; // vercel backend host link
+const BACKEND_URL = "http://13.63.215.171:9090";  // AWS backend host URL 
+// const BACKEND_URL = "https://video-calling-app-bh65.vercel.app/"; // vercel backend host link
 const SERVER_URL =
   typeof window !== "undefined" && window.location.hostname !== "localhost"
     ? window.location.origin
