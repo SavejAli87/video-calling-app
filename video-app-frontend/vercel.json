@@ -2,7 +2,7 @@
   "rewrites": [
     {
       "source": "/socket.io/(.*)",
-      "destination": "https://video-calling-app-bh65.vercel.app/socket.io/$1"
+      "destination": "http://video-calling-app-bh65.vercel.app/socket.io/$1"
     },
     {
       "source": "/(.*)",
