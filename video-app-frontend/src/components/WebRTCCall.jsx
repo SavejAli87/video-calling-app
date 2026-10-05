@@ -216,16 +216,39 @@ const WebRTCCall = () => {
       }
     };
 
+    // peer.onconnectionstatechange = () => {
+    //   if (!peerRef.current) return;
+    //   const state = peerRef.current.connectionState;
+    //   if (state === "connected") setStatus("🟢 Video call connected");
+    //   if (state === "connecting") setStatus("🟡 Connecting peer...");
+    //   if (state === "failed") {
+    //     setStatus("🔴 WebRTC connection failed");
+    //     cleanupCall();
+    //   }
+    //   if (state === "disconnected" || state === "closed") {
+    //     cleanupCall();
+    //   }
+    // };
+
     peer.onconnectionstatechange = () => {
       if (!peerRef.current) return;
       const state = peerRef.current.connectionState;
-      if (state === "connected") setStatus("🟢 Video call connected");
-      if (state === "connecting") setStatus("🟡 Connecting peer...");
-      if (state === "failed") {
+      console.log("Connection State Changed:", state);
+
+      if (state === "connected") {
+        setStatus("🟢 Video call connected");
+      } else if (state === "connecting") {
+        setStatus("🟡 Connecting peer...");
+      } else if (state === "disconnected") {
+        setStatus("🟡 Connection unstable, trying to recover...");
+        // Direct cleanup mat karo — network ko switch ya recover hone ka 5 sec time do
+        setTimeout(() => {
+          if (peerRef.current?.connectionState === "disconnected") {
+            cleanupCall();
+          }
+        }, 5000);
+      } else if (state === "failed") {
         setStatus("🔴 WebRTC connection failed");
-        cleanupCall();
-      }
-      if (state === "disconnected" || state === "closed") {
         cleanupCall();
       }
     };
