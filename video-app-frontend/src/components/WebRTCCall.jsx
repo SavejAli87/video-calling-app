@@ -2,53 +2,79 @@ import React, { useState, useEffect, useRef, useCallback } from "react";
 import { io } from "socket.io-client";
 
 // Netlify par auto same-origin (Proxy ke liye) aur Localhost par seedha EC2 IP
-// const BACKEND_URL = "http://13.63.215.171:9090";  // AWS backend host URL 
-const BACKEND_URL = "https://video-calling-app-z1ed.onrender.com"; // vercel backend host link
-const SERVER_URL =
-  typeof window !== "undefined" && window.location.hostname !== "localhost"
-    ? window.location.origin
-    : import.meta.env.VITE_SIGNALING_URL || BACKEND_URL;
+const BACKEND_URL = "https://video-calling-app-z1ed.onrender.com"; // Render backend (Socket.IO server)
 
-const RTC_CONFIG = {
-  iceServers: [
-    { urls: "stun:stun.l.google.com:19302" },
-    { urls: "stun:stun1.l.google.com:19302" },
-    {
-      urls: "turn:relay.metered.ca:80",
-      username: "7d0a3eb1d65b2b34241a0504",
-      credential: "4aIMxkrkrBGwZaEV",
-    },
-    {
-      urls: "turn:relay.metered.ca:443",
-      username: "7d0a3eb1d65b2b34241a0504",
-      credential: "4aIMxkrkrBGwZaEV",
-    },
-    {
-      urls: "turn:relay.metered.ca:443?transport=tcp",
-      username: "7d0a3eb1d65b2b34241a0504",
-      credential: "4aIMxkrkrBGwZaEV",
-    },
+// VITE_SIGNALING_URL set hai toh woh use karo, warna hamesha Render backend
+// (Vercel ka apna origin use mat karo - WebSocket support nahi hai Vercel pe)
+const SERVER_URL = import.meta.env.VITE_SIGNALING_URL || BACKEND_URL;
 
-    // {
-    //   urls: "turn:relay.metered.ca:80",
-    //   username: "openrelayproject",
-    //   credential: "openrelayproject",
-    // },
-    // {
-    //   urls: "turn:relay.metered.ca:443",
-    //   username: "openrelayproject",
-    //   credential: "openrelayproject",
-    // },
-    // {
-    //   urls: "turn:relay.metered.ca:443?transport=tcp",
-    //   username: "openrelayproject",
-    //   credential: "openrelayproject",
-    // },
+// TURN credentials dynamically backend se fetch honge (expire nahi honge)
+const FALLBACK_ICE_SERVERS = [
+  { urls: "stun:stun.l.google.com:19302" },
+  { urls: "stun:stun1.l.google.com:19302" },
+  // Open relay fallback (jab backend se credentials na milein)
+  {
+    urls: "turn:relay.metered.ca:80",
+    username: "openrelayproject",
+    credential: "openrelayproject",
+  },
+  {
+    urls: "turn:relay.metered.ca:443",
+    username: "openrelayproject",
+    credential: "openrelayproject",
+  },
+  {
+    urls: "turn:relay.metered.ca:443?transport=tcp",
+    username: "openrelayproject",
+    credential: "openrelayproject",
+  },
 
+  // { urls: "stun:stun.l.google.com:19302" },
+  // { urls: "stun:stun1.l.google.com:19302" },
+  // {
+  //   urls: "turn:relay.metered.ca:80",
+  //   username: "7d0a3eb1d65b2b34241a0504",
+  //   credential: "4aIMxkrkrBGwZaEV",
+  // },
+  // {
+  //   urls: "turn:relay.metered.ca:443",
+  //   username: "7d0a3eb1d65b2b34241a0504",
+  //   credential: "4aIMxkrkrBGwZaEV",
+  // },
+  // {
+  //   urls: "turn:relay.metered.ca:443?transport=tcp",
+  //   username: "7d0a3eb1d65b2b34241a0504",
+  //   credential: "4aIMxkrkrBGwZaEV",
+  // },
 
-  ],
-  iceCandidatePoolSize: 10,
-};
+];
+
+async function fetchRTCConfig() {
+  // Localhost par CORS issue hota hai, seedha fallback use karo
+  const isLocalhost = typeof window !== "undefined" &&
+    (window.location.hostname === "localhost" || window.location.hostname === "127.0.0.1");
+
+  if (!isLocalhost) {
+    try {
+      const res = await fetch(`${SERVER_URL}/api/turn-credentials`);
+      if (!res.ok) throw new Error("TURN API failed");
+      const iceServers = await res.json();
+      return {
+        iceServers: [
+          { urls: "stun:stun.l.google.com:19302" },
+          { urls: "stun:stun1.l.google.com:19302" },
+          ...iceServers,
+        ],
+        iceCandidatePoolSize: 10,
+      };
+    } catch (err) {
+      console.warn("TURN credentials fetch failed, using fallback:", err.message);
+    }
+  }
+
+  // Localhost ya API fail → Open Relay fallback
+  return { iceServers: FALLBACK_ICE_SERVERS, iceCandidatePoolSize: 10 };
+}
 
 const WebRTCCall = () => {
   const [socketId, setSocketId] = useState("Connecting to server...");
@@ -177,12 +203,13 @@ const WebRTCCall = () => {
   }, []);
 
   // Peer Connection Setup
-  const createPeer = useCallback(() => {
+  const createPeer = useCallback(async () => {
     if (peerRef.current) {
       peerRef.current.close();
     }
 
-    const peer = new RTCPeerConnection(RTC_CONFIG);
+    const rtcConfig = await fetchRTCConfig();
+    const peer = new RTCPeerConnection(rtcConfig);
     remoteStreamRef.current = new MediaStream();
 
     if (remoteVideoRef.current) {
@@ -216,39 +243,16 @@ const WebRTCCall = () => {
       }
     };
 
-    // peer.onconnectionstatechange = () => {
-    //   if (!peerRef.current) return;
-    //   const state = peerRef.current.connectionState;
-    //   if (state === "connected") setStatus("🟢 Video call connected");
-    //   if (state === "connecting") setStatus("🟡 Connecting peer...");
-    //   if (state === "failed") {
-    //     setStatus("🔴 WebRTC connection failed");
-    //     cleanupCall();
-    //   }
-    //   if (state === "disconnected" || state === "closed") {
-    //     cleanupCall();
-    //   }
-    // };
-
     peer.onconnectionstatechange = () => {
       if (!peerRef.current) return;
       const state = peerRef.current.connectionState;
-      console.log("Connection State Changed:", state);
-
-      if (state === "connected") {
-        setStatus("🟢 Video call connected");
-      } else if (state === "connecting") {
-        setStatus("🟡 Connecting peer...");
-      } else if (state === "disconnected") {
-        setStatus("🟡 Connection unstable, trying to recover...");
-        // Direct cleanup mat karo — network ko switch ya recover hone ka 5 sec time do
-        setTimeout(() => {
-          if (peerRef.current?.connectionState === "disconnected") {
-            cleanupCall();
-          }
-        }, 5000);
-      } else if (state === "failed") {
+      if (state === "connected") setStatus("🟢 Video call connected");
+      if (state === "connecting") setStatus("🟡 Connecting peer...");
+      if (state === "failed") {
         setStatus("🔴 WebRTC connection failed");
+        cleanupCall();
+      }
+      if (state === "disconnected" || state === "closed") {
         cleanupCall();
       }
     };
@@ -335,7 +339,7 @@ const WebRTCCall = () => {
 
         remoteDescriptionSetRef.current = false;
         pendingIceCandidatesRef.current = [];
-        const peer = createPeer();
+        const peer = await createPeer();
         addLocalTracks(peer, localStream);
 
         socket.emit("call-accepted", { targetSocketId: data.callerSocketId });
@@ -354,7 +358,7 @@ const WebRTCCall = () => {
 
         remoteDescriptionSetRef.current = false;
         pendingIceCandidatesRef.current = [];
-        const peer = createPeer();
+        const peer = await createPeer();
         addLocalTracks(peer, localStream);
 
         const offer = await peer.createOffer({
@@ -385,7 +389,7 @@ const WebRTCCall = () => {
         if (!peer) {
           remoteDescriptionSetRef.current = false;
           pendingIceCandidatesRef.current = [];
-          peer = createPeer();
+          peer = await createPeer();
         }
 
         addLocalTracks(peer, localStream);
