@@ -54,17 +54,38 @@ const SERVER_URL =
 //   iceCandidatePoolSize: 10,
 // };
 
+// const RTC_CONFIG = {
+//   iceServers: [
+//     {
+//       urls: [
+//         "turn:relay.metered.ca:80",
+//         "turn:relay.metered.ca:443",
+//         "turn:relay.metered.ca:443?transport=tcp",
+//         "turns:relay.metered.ca:443?transport=tcp"
+//       ],
+//       username: "7d0a3eb1d65b2b34241a0504",
+//       credential: "4aIMxkrkrBGwZaEV"
+//     }
+//   ],
+
+//   iceTransportPolicy: "relay",
+//   iceCandidatePoolSize: 10
+// };
+
+
 const RTC_CONFIG = {
   iceServers: [
     {
+      urls: "stun:stun.l.google.com:19302"
+    },
+
+    {
       urls: [
-        "turn:relay.metered.ca:80",
-        "turn:relay.metered.ca:443",
-        "turn:relay.metered.ca:443?transport=tcp",
-        "turns:relay.metered.ca:443?transport=tcp"
+        "turn:free.expressturn.com:3478?transport=udp",
+        "turn:free.expressturn.com:3478?transport=tcp"
       ],
-      username: "7d0a3eb1d65b2b34241a0504",
-      credential: "4aIMxkrkrBGwZaEV"
+      username: "000000002106565262",
+      credential: "v6jnlr1Yh6Aow9HFRHH4A15kCQA="
     }
   ],
 

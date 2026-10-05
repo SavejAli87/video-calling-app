@@ -23,19 +23,57 @@ const METERED_API_KEY = process.env.METERED_API_KEY || "YOUR_METERED_API_KEY";
 app.use(express.static(path.join(__dirname, "public")));
 
 // Dynamic TURN credentials API endpoint
-app.get("/api/turn-credentials", async (req, res) => {
+// app.get("/api/turn-credentials", async (req, res) => {
+//   try {
+//     const response = await fetch(
+//       `https://${METERED_DOMAIN}.metered.ca/api/v1/turn/credentials?apiKey=${METERED_API_KEY}`
+//     );
+//     const iceServers = await response.json();
+//     res.json(iceServers);
+//   } catch (error) {
+//     console.error("Failed to fetch TURN credentials:", error);
+//     // Fallback STUN
+//     res.json([{ urls: "stun:stun.l.google.com:19302" }]);
+//   }
+// });
+
+app.get("/api/turn-credentials", (req, res) => {
   try {
-    const response = await fetch(
-      `https://${METERED_DOMAIN}.metered.ca/api/v1/turn/credentials?apiKey=${METERED_API_KEY}`
-    );
-    const iceServers = await response.json();
+    const turnServer = process.env.TURN_SERVER;
+    const username = process.env.TURN_USERNAME;
+    const credential = process.env.TURN_PASSWORD;
+
+    if (!turnServer || !username || !credential) {
+      return res.status(500).json({
+        error: "TURN credentials are not configured"
+      });
+    }
+
+    const iceServers = [
+      {
+        urls: "stun:stun.l.google.com:19302"
+      },
+      {
+        urls: [
+          `turn:${turnServer}?transport=udp`,
+          `turn:${turnServer}?transport=tcp`
+        ],
+        username,
+        credential
+      }
+    ];
+
     res.json(iceServers);
+
   } catch (error) {
-    console.error("Failed to fetch TURN credentials:", error);
-    // Fallback STUN
-    res.json([{ urls: "stun:stun.l.google.com:19302" }]);
+    console.error("TURN credentials error:", error);
+
+    res.status(500).json({
+      error: "Failed to generate TURN configuration"
+    });
   }
 });
+
 
 async function startServer() {
   try {
