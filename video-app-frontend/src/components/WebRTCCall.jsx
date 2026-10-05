@@ -281,6 +281,41 @@ const WebRTCCall = () => {
       }
     };
 
+    // create function //////////////////////////////////////
+
+    peer.oniceconnectionstatechange = () => {
+      console.log(
+        "🧊 ICE CONNECTION STATE:",
+        peer.iceConnectionState
+      );
+    };
+
+    peer.onconnectionstatechange = () => {
+      console.log(
+        "🔗 PEER CONNECTION STATE:",
+        peer.connectionState
+      );
+    };
+
+    peer.onicecandidate = (event) => {
+      if (event.candidate) {
+        console.log(
+          "🧊 ICE CANDIDATE:",
+          event.candidate.candidate
+        );
+      } else {
+        console.log("🧊 ICE GATHERING COMPLETED");
+      }
+    };
+
+    peer.onicecandidateerror = (event) => {
+      console.error("❌ ICE CANDIDATE ERROR:", {
+        url: event.url,
+        errorCode: event.errorCode,
+        errorText: event.errorText
+      });
+    };
+
     peer.oniceconnectionstatechange = () => {
       if (!peerRef.current) return;
       const iceState = peerRef.current.iceConnectionState;
