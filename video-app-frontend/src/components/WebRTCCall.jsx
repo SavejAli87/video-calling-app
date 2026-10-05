@@ -9,49 +9,67 @@ const SERVER_URL =
     ? window.location.origin
     : import.meta.env.VITE_SIGNALING_URL || BACKEND_URL;
 
+// const RTC_CONFIG = {
+//   iceServers: [
+//     { urls: "stun:stun.l.google.com:19302" },
+//     { urls: "stun:stun1.l.google.com:19302" },
+//     {
+//       urls: "turn:relay.metered.ca:80",
+//       username: "7d0a3eb1d65b2b34241a0504",
+//       credential: "4aIMxkrkrBGwZaEV",
+//     },
+//     {
+//       urls: "turn:relay.metered.ca:443",
+//       username: "7d0a3eb1d65b2b34241a0504",
+//       credential: "4aIMxkrkrBGwZaEV",
+//     },
+//     {
+//       urls: "turn:relay.metered.ca:443?transport=tcp",
+//       username: "7d0a3eb1d65b2b34241a0504",
+//       credential: "4aIMxkrkrBGwZaEV",
+//     },
+
+//     // {
+//     //   urls: "turn:relay.metered.ca:80",
+//     //   username: "openrelayproject",
+//     //   credential: "openrelayproject",
+//     // },
+//     // {
+//     //   urls: "turn:relay.metered.ca:443",
+//     //   username: "openrelayproject",
+//     //   credential: "openrelayproject",
+//     // },
+//     // {
+//     //   urls: "turn:relay.metered.ca:443?transport=tcp",
+//     //   username: "openrelayproject",
+//     //   credential: "openrelayproject",
+//     // },
+
+
+//   ],
+
+
+//   iceTransportPolicy: "relay",
+
+//   iceCandidatePoolSize: 10,
+// };
+
 const RTC_CONFIG = {
   iceServers: [
-    { urls: "stun:stun.l.google.com:19302" },
-    { urls: "stun:stun1.l.google.com:19302" },
     {
-      urls: "turn:relay.metered.ca:80",
+      urls: [
+        "turn:relay.metered.ca:80",
+        "turn:relay.metered.ca:443",
+        "turn:relay.metered.ca:443?transport=tcp",
+        "turns:relay.metered.ca:443?transport=tcp"
+      ],
       username: "7d0a3eb1d65b2b34241a0504",
-      credential: "4aIMxkrkrBGwZaEV",
-    },
-    {
-      urls: "turn:relay.metered.ca:443",
-      username: "7d0a3eb1d65b2b34241a0504",
-      credential: "4aIMxkrkrBGwZaEV",
-    },
-    {
-      urls: "turn:relay.metered.ca:443?transport=tcp",
-      username: "7d0a3eb1d65b2b34241a0504",
-      credential: "4aIMxkrkrBGwZaEV",
-    },
-
-    // {
-    //   urls: "turn:relay.metered.ca:80",
-    //   username: "openrelayproject",
-    //   credential: "openrelayproject",
-    // },
-    // {
-    //   urls: "turn:relay.metered.ca:443",
-    //   username: "openrelayproject",
-    //   credential: "openrelayproject",
-    // },
-    // {
-    //   urls: "turn:relay.metered.ca:443?transport=tcp",
-    //   username: "openrelayproject",
-    //   credential: "openrelayproject",
-    // },
-
-
+      credential: "4aIMxkrkrBGwZaEV"
+    }
   ],
 
-
   iceTransportPolicy: "relay",
-
-  iceCandidatePoolSize: 10,
+  iceCandidatePoolSize: 10
 };
 
 const WebRTCCall = () => {
