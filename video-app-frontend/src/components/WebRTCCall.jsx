@@ -9,12 +9,6 @@ const BACKEND_URL = "https://video-calling-app-z1ed.onrender.com";
 const SERVER_URL = import.meta.env.VITE_SIGNALING_URL || BACKEND_URL;
 
 // ---------------------------------------------------------------------------
-// WebRTC config
-// TURN credentials .env me rakho:
-//   VITE_TURN_USER=xxxx
-//   VITE_TURN_CRED=xxxx
-// (purane credentials jo code me the, unhe rotate/change kar do)
-// ---------------------------------------------------------------------------
 const RTC_CONFIG = {
   iceServers: [
     { urls: "stun:stun.l.google.com:19302" },
@@ -174,18 +168,14 @@ const WebRTCCall = () => {
   // Peer Connection Setup (har handler sirf ek baar)
   // -------------------------------------------------------------------------
   const createPeer = useCallback(() => {
-    if (peerRef.current) {
-      peerRef.current.close();
-    }
+    if (peerRef.current) peerRef.current.close();
 
     const peer = new RTCPeerConnection(RTC_CONFIG);
     remoteStreamRef.current = new MediaStream();
-
     if (remoteVideoRef.current) {
       remoteVideoRef.current.srcObject = remoteStreamRef.current;
     }
 
-    // Remote track receiver
     peer.ontrack = (event) => {
       let stream = event.streams && event.streams[0];
       if (!stream) {
@@ -194,19 +184,13 @@ const WebRTCCall = () => {
       }
       remoteStreamRef.current = stream;
 
-      // Sirf tab set karo jab alag stream ho -> AbortError nahi aayega
       if (remoteVideoRef.current && remoteVideoRef.current.srcObject !== stream) {
         remoteVideoRef.current.srcObject = stream;
       }
     };
 
-    // ICE candidate doosre peer ko bhejna (sabse important)
     peer.onicecandidate = (event) => {
-      if (!event.candidate) {
-        console.log("🧊 ICE gathering completed");
-        return;
-      }
-      console.log("🧊 ICE candidate:", event.candidate.candidate);
+      if (!event.candidate) return;
 
       if (currentTargetRef.current && socketRef.current?.connected) {
         socketRef.current.emit("ice-candidate", {
@@ -216,13 +200,8 @@ const WebRTCCall = () => {
       }
     };
 
-    peer.onicecandidateerror = (e) => {
-      console.warn("ICE candidate error:", e.url, e.errorCode, e.errorText);
-    };
-
     peer.oniceconnectionstatechange = () => {
       const s = peer.iceConnectionState;
-      console.log("ICE state:", s);
       if (s === "connected" || s === "completed") {
         setStatus("🟢 Media connection established");
       }
@@ -233,7 +212,6 @@ const WebRTCCall = () => {
 
     peer.onconnectionstatechange = () => {
       const state = peer.connectionState;
-      console.log("Peer state:", state);
 
       if (state === "connected") {
         setStatus("🟢 Video call connected");
@@ -241,7 +219,6 @@ const WebRTCCall = () => {
         setStatus("🟡 Connecting peer...");
       } else if (state === "disconnected") {
         setStatus("🟡 Connection unstable, trying to recover...");
-        // Network recover hone ke liye 5 sec ka time do
         setTimeout(() => {
           if (peerRef.current?.connectionState === "disconnected") {
             cleanupCall();
