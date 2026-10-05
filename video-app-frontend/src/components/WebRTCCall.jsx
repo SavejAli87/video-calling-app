@@ -1,96 +1,35 @@
 import React, { useState, useEffect, useRef, useCallback } from "react";
 import { io } from "socket.io-client";
 
-// Netlify par auto same-origin (Proxy ke liye) aur Localhost par seedha EC2 IP
-// const BACKEND_URL = "http://13.63.215.171:9090";  // AWS backend host URL 
-const BACKEND_URL = "https://video-calling-app-z1ed.onrender.com"; // vercel backend host link
-const SERVER_URL =
-  typeof window !== "undefined" && window.location.hostname !== "localhost"
-    ? window.location.origin
-    : import.meta.env.VITE_SIGNALING_URL || BACKEND_URL;
+// ---------------------------------------------------------------------------
+// Server URL
+// Vercel/Netlify WebSocket proxy nahi karte, isliye seedha Render backend use karo.
+// ---------------------------------------------------------------------------
+const BACKEND_URL = "https://video-calling-app-z1ed.onrender.com";
+const SERVER_URL = import.meta.env.VITE_SIGNALING_URL || BACKEND_URL;
 
-// const RTC_CONFIG = {
-//   iceServers: [
-//     { urls: "stun:stun.l.google.com:19302" },
-//     { urls: "stun:stun1.l.google.com:19302" },
-//     {
-//       urls: "turn:relay.metered.ca:80",
-//       username: "7d0a3eb1d65b2b34241a0504",
-//       credential: "4aIMxkrkrBGwZaEV",
-//     },
-//     {
-//       urls: "turn:relay.metered.ca:443",
-//       username: "7d0a3eb1d65b2b34241a0504",
-//       credential: "4aIMxkrkrBGwZaEV",
-//     },
-//     {
-//       urls: "turn:relay.metered.ca:443?transport=tcp",
-//       username: "7d0a3eb1d65b2b34241a0504",
-//       credential: "4aIMxkrkrBGwZaEV",
-//     },
-
-//     // {
-//     //   urls: "turn:relay.metered.ca:80",
-//     //   username: "openrelayproject",
-//     //   credential: "openrelayproject",
-//     // },
-//     // {
-//     //   urls: "turn:relay.metered.ca:443",
-//     //   username: "openrelayproject",
-//     //   credential: "openrelayproject",
-//     // },
-//     // {
-//     //   urls: "turn:relay.metered.ca:443?transport=tcp",
-//     //   username: "openrelayproject",
-//     //   credential: "openrelayproject",
-//     // },
-
-
-//   ],
-
-
-//   iceTransportPolicy: "relay",
-
-//   iceCandidatePoolSize: 10,
-// };
-
-// const RTC_CONFIG = {
-//   iceServers: [
-//     {
-//       urls: [
-//         "turn:relay.metered.ca:80",
-//         "turn:relay.metered.ca:443",
-//         "turn:relay.metered.ca:443?transport=tcp",
-//         "turns:relay.metered.ca:443?transport=tcp"
-//       ],
-//       username: "7d0a3eb1d65b2b34241a0504",
-//       credential: "4aIMxkrkrBGwZaEV"
-//     }
-//   ],
-
-//   iceTransportPolicy: "relay",
-//   iceCandidatePoolSize: 10
-// };
-
-
+// ---------------------------------------------------------------------------
+// WebRTC config
+// TURN credentials .env me rakho:
+//   VITE_TURN_USER=xxxx
+//   VITE_TURN_CRED=xxxx
+// (purane credentials jo code me the, unhe rotate/change kar do)
+// ---------------------------------------------------------------------------
 const RTC_CONFIG = {
   iceServers: [
-    {
-      urls: "stun:stun.l.google.com:19302"
-    },
-
+    { urls: "stun:stun.l.google.com:19302" },
     {
       urls: [
         "turn:free.expressturn.com:3478?transport=udp",
-        "turn:free.expressturn.com:3478?transport=tcp"
+        "turn:free.expressturn.com:3478?transport=tcp",
       ],
-      username: "000000002106565262",
-      credential: "v6jnlr1Yh6Aow9HFRHH4A15kCQA="
-    }
+      username: import.meta.env.VITE_TURN_USER,
+      credential: import.meta.env.VITE_TURN_CRED,
+    },
   ],
-
-  iceTransportPolicy: "relay",
-  iceCandidatePoolSize: 10
+  // "all" = direct + TURN fallback. Sirf debugging ke liye "relay" use karo.
+  iceTransportPolicy: "all",
+  iceCandidatePoolSize: 10,
 };
 
 const WebRTCCall = () => {
@@ -112,11 +51,16 @@ const WebRTCCall = () => {
   const localVideoRef = useRef(null);
   const remoteVideoRef = useRef(null);
 
+  // -------------------------------------------------------------------------
   // Call Cleanup
+  // -------------------------------------------------------------------------
   const cleanupCall = useCallback(() => {
     if (peerRef.current) {
       peerRef.current.onicecandidate = null;
       peerRef.current.ontrack = null;
+      peerRef.current.onconnectionstatechange = null;
+      peerRef.current.oniceconnectionstatechange = null;
+      peerRef.current.onicecandidateerror = null;
       peerRef.current.close();
       peerRef.current = null;
     }
@@ -142,7 +86,9 @@ const WebRTCCall = () => {
     setStatus("🟢 Ready for another call");
   }, []);
 
+  // -------------------------------------------------------------------------
   // Flush Queued ICE Candidates
+  // -------------------------------------------------------------------------
   const flushPendingIceCandidates = useCallback(async () => {
     if (!peerRef.current || !remoteDescriptionSetRef.current) return;
 
@@ -156,7 +102,9 @@ const WebRTCCall = () => {
     }
   }, []);
 
+  // -------------------------------------------------------------------------
   // Camera & Mic Access
+  // -------------------------------------------------------------------------
   const startCamera = useCallback(async () => {
     if (localStreamRef.current) return localStreamRef.current;
 
@@ -171,7 +119,7 @@ const WebRTCCall = () => {
         "Camera/Microphone API blocked!\n\n" +
         "Browsers block camera access over plain HTTP (unless using http://localhost).\n\n" +
         "Solutions:\n" +
-        "1. Open using HTTPS (e.g. your Netlify URL)\n" +
+        "1. Open using HTTPS (e.g. your Vercel/Netlify URL)\n" +
         "2. Open using http://localhost:5173";
       alert(errorMsg);
       throw new Error(errorMsg);
@@ -189,12 +137,13 @@ const WebRTCCall = () => {
 
       const stream = navigator.mediaDevices?.getUserMedia
         ? await navigator.mediaDevices.getUserMedia(constraints)
-        : await new Promise((resolve, reject) => getMedia(constraints, resolve, reject));
+        : await new Promise((resolve, reject) =>
+          getMedia(constraints, resolve, reject)
+        );
 
       localStreamRef.current = stream;
       if (localVideoRef.current) {
         localVideoRef.current.srcObject = stream;
-        localVideoRef.current.play().catch((err) => console.log("Local autoplay:", err));
       }
       return stream;
     } catch (error) {
@@ -204,7 +153,9 @@ const WebRTCCall = () => {
     }
   }, []);
 
-  // Local tracks peer connection me add karna
+  // -------------------------------------------------------------------------
+  // Local tracks ko peer connection me add karna
+  // -------------------------------------------------------------------------
   const addLocalTracks = useCallback((peer, stream) => {
     if (!peer || !stream) return;
 
@@ -219,7 +170,9 @@ const WebRTCCall = () => {
     });
   }, []);
 
-  // Peer Connection Setup
+  // -------------------------------------------------------------------------
+  // Peer Connection Setup (har handler sirf ek baar)
+  // -------------------------------------------------------------------------
   const createPeer = useCallback(() => {
     if (peerRef.current) {
       peerRef.current.close();
@@ -232,57 +185,55 @@ const WebRTCCall = () => {
       remoteVideoRef.current.srcObject = remoteStreamRef.current;
     }
 
-    // Remote Track Receiver
+    // Remote track receiver
     peer.ontrack = (event) => {
-      if (event.streams && event.streams[0]) {
-        if (remoteVideoRef.current) {
-          remoteVideoRef.current.srcObject = event.streams[0];
-          remoteStreamRef.current = event.streams[0];
-        }
-      } else {
-        remoteStreamRef.current.addTrack(event.track);
-        if (remoteVideoRef.current) {
-          remoteVideoRef.current.srcObject = remoteStreamRef.current;
-        }
+      let stream = event.streams && event.streams[0];
+      if (!stream) {
+        stream = remoteStreamRef.current;
+        stream.addTrack(event.track);
       }
+      remoteStreamRef.current = stream;
 
-      remoteVideoRef.current?.play().catch((err) => console.log("Remote play error:", err));
+      // Sirf tab set karo jab alag stream ho -> AbortError nahi aayega
+      if (remoteVideoRef.current && remoteVideoRef.current.srcObject !== stream) {
+        remoteVideoRef.current.srcObject = stream;
+      }
     };
 
-    // Candidate Sending
-    // peer.onicecandidate = (event) => {
-    //   if (event.candidate && currentTargetRef.current && socketRef.current?.connected) {
-    //     socketRef.current.emit("ice-candidate", {
-    //       targetSocketId: currentTargetRef.current,
-    //       candidate: event.candidate,
-    //     });
-    //   }
-    // };
-
+    // ICE candidate doosre peer ko bhejna (sabse important)
     peer.onicecandidate = (event) => {
-      if (event.candidate) {
-        console.log("🧊 ICE Candidate:", event.candidate.candidate);
-
-        if (
-          currentTargetRef.current &&
-          socketRef.current?.connected
-        ) {
-          socketRef.current.emit("ice-candidate", {
-            targetSocketId: currentTargetRef.current,
-            candidate: event.candidate,
-          });
-        }
-      } else {
+      if (!event.candidate) {
         console.log("🧊 ICE gathering completed");
+        return;
+      }
+      console.log("🧊 ICE candidate:", event.candidate.candidate);
+
+      if (currentTargetRef.current && socketRef.current?.connected) {
+        socketRef.current.emit("ice-candidate", {
+          targetSocketId: currentTargetRef.current,
+          candidate: event.candidate,
+        });
       }
     };
 
+    peer.onicecandidateerror = (e) => {
+      console.warn("ICE candidate error:", e.url, e.errorCode, e.errorText);
+    };
 
+    peer.oniceconnectionstatechange = () => {
+      const s = peer.iceConnectionState;
+      console.log("ICE state:", s);
+      if (s === "connected" || s === "completed") {
+        setStatus("🟢 Media connection established");
+      }
+      if (s === "failed") {
+        setStatus("🔴 ICE failed");
+      }
+    };
 
     peer.onconnectionstatechange = () => {
-      if (!peerRef.current) return;
-      const state = peerRef.current.connectionState;
-      console.log("Connection State Changed:", state);
+      const state = peer.connectionState;
+      console.log("Peer state:", state);
 
       if (state === "connected") {
         setStatus("🟢 Video call connected");
@@ -290,7 +241,7 @@ const WebRTCCall = () => {
         setStatus("🟡 Connecting peer...");
       } else if (state === "disconnected") {
         setStatus("🟡 Connection unstable, trying to recover...");
-        // Direct cleanup mat karo — network ko switch ya recover hone ka 5 sec time do
+        // Network recover hone ke liye 5 sec ka time do
         setTimeout(() => {
           if (peerRef.current?.connectionState === "disconnected") {
             cleanupCall();
@@ -302,69 +253,25 @@ const WebRTCCall = () => {
       }
     };
 
-    // create function //////////////////////////////////////
-
-    peer.oniceconnectionstatechange = () => {
-      console.log(
-        "🧊 ICE CONNECTION STATE:",
-        peer.iceConnectionState
-      );
-    };
-
-    peer.onconnectionstatechange = () => {
-      console.log(
-        "🔗 PEER CONNECTION STATE:",
-        peer.connectionState
-      );
-    };
-
-    peer.onicecandidate = (event) => {
-      if (event.candidate) {
-        console.log(
-          "🧊 ICE CANDIDATE:",
-          event.candidate.candidate
-        );
-      } else {
-        console.log("🧊 ICE GATHERING COMPLETED");
-      }
-    };
-
-    peer.onicecandidateerror = (event) => {
-      console.error("❌ ICE CANDIDATE ERROR:", {
-        url: event.url,
-        errorCode: event.errorCode,
-        errorText: event.errorText
-      });
-    };
-
-    peer.oniceconnectionstatechange = () => {
-      if (!peerRef.current) return;
-      const iceState = peerRef.current.iceConnectionState;
-      if (iceState === "connected" || iceState === "completed") {
-        setStatus("🟢 Media connection established");
-      }
-      if (iceState === "failed") {
-        setStatus("🔴 ICE failed - Relay connection dropped");
-      }
-    };
-
     peerRef.current = peer;
     return peer;
   }, [cleanupCall]);
 
+  // -------------------------------------------------------------------------
   // Socket Lifecycle
+  // -------------------------------------------------------------------------
   useEffect(() => {
     let devId = localStorage.getItem("deviceId");
     if (!devId) {
-      devId = "device-" + Date.now() + "-" + Math.random().toString(36).substring(2, 10);
+      devId =
+        "device-" + Date.now() + "-" + Math.random().toString(36).substring(2, 10);
       localStorage.setItem("deviceId", devId);
     }
     const devName = "Device-" + devId.slice(-5).toUpperCase();
     setDeviceName(devName);
 
     const socket = io(SERVER_URL, {
-      path: "/socket.io",
-      transports: ["polling", "websocket"],
+      transports: ["websocket", "polling"],
       reconnectionAttempts: 10,
       reconnectionDelay: 1000,
     });
@@ -387,7 +294,7 @@ const WebRTCCall = () => {
 
     socket.on("connect_error", (err) => {
       setIsConnected(false);
-      setStatus("🔴 Connection failed (Check Netlify proxy / EC2 backend)");
+      setStatus("🔴 Connection failed (Check backend URL / CORS)");
       console.error("Socket error details:", err.message);
     });
 
@@ -395,7 +302,7 @@ const WebRTCCall = () => {
       setDevices(deviceList);
     });
 
-    // Incoming Call Receiver
+    // Incoming call receiver
     socket.on("incoming-call", async (data) => {
       if (currentTargetRef.current) {
         socket.emit("call-rejected", { targetSocketId: data.callerSocketId });
@@ -403,7 +310,9 @@ const WebRTCCall = () => {
       }
 
       const caller = data.caller?.deviceName || "Unknown Device";
-      const accept = window.confirm(`📞 Incoming Video Call\n\n${caller} is calling you.\n\nAccept?`);
+      const accept = window.confirm(
+        `📞 Incoming Video Call\n\n${caller} is calling you.\n\nAccept?`
+      );
 
       if (!accept) {
         socket.emit("call-rejected", { targetSocketId: data.callerSocketId });
@@ -430,7 +339,7 @@ const WebRTCCall = () => {
       }
     });
 
-    // Caller Side
+    // Caller side
     socket.on("call-accepted", async (data) => {
       try {
         currentTargetRef.current = data.targetSocketId;
@@ -459,7 +368,7 @@ const WebRTCCall = () => {
       }
     });
 
-    // Receiver Answer Handler
+    // Receiver: offer handle karke answer bhejna
     socket.on("offer", async (data) => {
       try {
         currentTargetRef.current = data.callerSocketId;
@@ -492,11 +401,13 @@ const WebRTCCall = () => {
       }
     });
 
-    // Caller Answer Receiver
+    // Caller: answer receive karna
     socket.on("answer", async (data) => {
       try {
         if (!peerRef.current) return;
-        await peerRef.current.setRemoteDescription(new RTCSessionDescription(data.answer));
+        await peerRef.current.setRemoteDescription(
+          new RTCSessionDescription(data.answer)
+        );
         remoteDescriptionSetRef.current = true;
         await flushPendingIceCandidates();
       } catch (err) {
@@ -504,7 +415,7 @@ const WebRTCCall = () => {
       }
     });
 
-    // ICE Candidate Handler
+    // ICE candidate handler
     socket.on("ice-candidate", async (data) => {
       try {
         const candidate = new RTCIceCandidate(data.candidate);
@@ -539,7 +450,9 @@ const WebRTCCall = () => {
     };
   }, [createPeer, addLocalTracks, startCamera, cleanupCall, flushPendingIceCandidates]);
 
-  // Safe Call Device Trigger
+  // -------------------------------------------------------------------------
+  // Call / End call triggers
+  // -------------------------------------------------------------------------
   const handleCallDevice = (targetSocketId) => {
     if (!socketRef.current || !socketRef.current.connected) {
       alert("⚠️ Server connection lost. Please wait until status shows 🟢 Connected.");
@@ -553,7 +466,6 @@ const WebRTCCall = () => {
     socketRef.current.emit("call-device", { targetSocketId });
   };
 
-  // Safe End Call Trigger
   const handleEndCall = () => {
     if (currentTargetRef.current && socketRef.current?.connected) {
       socketRef.current.emit("end-call", {
@@ -565,6 +477,9 @@ const WebRTCCall = () => {
 
   const otherDevices = devices.filter((d) => d.socketId !== socketRef.current?.id);
 
+  // -------------------------------------------------------------------------
+  // UI
+  // -------------------------------------------------------------------------
   return (
     <div className="min-h-screen bg-neutral-900 text-white font-sans p-6 text-center">
       <div className="max-w-5xl mx-auto">
@@ -591,7 +506,7 @@ const WebRTCCall = () => {
             <div className="text-neutral-400 p-6 bg-neutral-800/50 rounded-xl border border-dashed border-neutral-700">
               No other devices connected.
               <br />
-              Open this Netlify URL on another device or mobile phone.
+              Open this URL on another device or mobile phone.
             </div>
           ) : (
             otherDevices.map((device) => (
