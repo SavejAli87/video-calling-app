@@ -1,3 +1,5 @@
+const { setupChat } = require("./src/chatHandler");
+
 function setupSocket(io) {
   const devices = new Map(); // socketId -> { socketId, deviceId, deviceName, status }
   const activeCalls = new Map(); // socketId -> inCallWithSocketId
@@ -15,6 +17,7 @@ function setupSocket(io) {
 
   io.on("connection", (socket) => {
     console.log(`[+] Connected: ${socket.id}`);
+
 
     // Register Device
     socket.on("register-device", (device) => {
@@ -120,6 +123,9 @@ function setupSocket(io) {
       }
       sendDeviceList();
     });
+
+    // chat Handler
+    setupChat(io, socket);
 
     // Disconnect
     socket.on("disconnect", () => {
