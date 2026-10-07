@@ -11,8 +11,6 @@ const Lobby = ({
   inCall,
   devices,
   onCall,
-  onOpenChat,
-  unreadCounts = {},
 }) => {
   const [clock, setClock] = useState(new Date());
 
@@ -98,12 +96,10 @@ const Lobby = ({
             <ul className="max-h-[420px] overflow-y-auto divide-y divide-[#f1f3f4]">
               {devices.map((device) => {
                 const busy = device.status === "busy";
-                const unread = unreadCounts[device.socketId] || 0;
-
                 return (
                   <li
                     key={device.socketId}
-                    className="flex items-center gap-4 px-6 py-3 hover:bg-[#f8f9fa] transition-colors"
+                    className="flex items-center gap-4 px-6 py-3 hover:bg-[#f8f9fa]"
                   >
                     <Avatar name={device.deviceName} size={44} />
                     <div className="min-w-0 flex-1">
@@ -114,32 +110,14 @@ const Lobby = ({
                         {busy ? "In a call" : "Available"}
                       </div>
                     </div>
-
-                    {/* Action Buttons: Chat & Call */}
-                    <div className="flex items-center gap-2">
-                      <button
-                        onClick={() => onOpenChat && onOpenChat(device)}
-                        className="relative flex items-center gap-1.5 rounded-full border border-[#dadce0] hover:bg-[#f1f3f4] text-[#1a73e8] text-sm font-medium px-4 py-2 transition-colors cursor-pointer"
-                        title="Open Chat"
-                      >
-                        <span className="text-base leading-none">💬</span>
-                        <span className="hidden sm:inline">Chat</span>
-                        {unread > 0 && (
-                          <span className="absolute -top-1.5 -right-1.5 bg-[#d93025] text-white text-[11px] font-bold px-1.5 py-0.2 rounded-full min-w-[18px] text-center shadow-sm">
-                            {unread}
-                          </span>
-                        )}
-                      </button>
-
-                      <button
-                        disabled={inCall || busy || !isConnected}
-                        onClick={() => onCall(device.socketId || device)}
-                        className="flex items-center gap-2 rounded-full bg-[#1a73e8] hover:bg-[#1765cc] disabled:bg-[#e8eaed] disabled:text-[#9aa0a6] disabled:cursor-not-allowed text-white text-sm font-medium px-5 py-2.5 transition-colors focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[#1a73e8] cursor-pointer"
-                      >
-                        <Icon name="video" className="w-5 h-5" />
-                        Call
-                      </button>
-                    </div>
+                    <button
+                      disabled={inCall || busy || !isConnected}
+                      onClick={() => onCall(device)}
+                      className="flex items-center gap-2 rounded-full bg-[#1a73e8] hover:bg-[#1765cc] disabled:bg-[#e8eaed] disabled:text-[#9aa0a6] disabled:cursor-not-allowed text-white text-sm font-medium px-5 py-2.5 transition-colors focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[#1a73e8]"
+                    >
+                      <Icon name="video" className="w-5 h-5" />
+                      Call
+                    </button>
                   </li>
                 );
               })}

@@ -1,4 +1,4 @@
-const { setupChat } = require("./src/chatHandler");
+// const { setupChat } = require("./src/chatHandler");
 
 function setupSocket(io) {
   const devices = new Map(); // socketId -> { socketId, deviceId, deviceName, status }
@@ -125,7 +125,7 @@ function setupSocket(io) {
     });
 
     // chat Handler
-    setupChat(io, socket);
+    // setupChat(io, socket);
 
     // Disconnect
     socket.on("disconnect", () => {
