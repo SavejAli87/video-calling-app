@@ -17,6 +17,9 @@ const CallScreen = ({
   micOn,
   camOn,
   seconds,
+  chatOpen,
+  chatUnread,
+  onToggleChat,
   onToggleMic,
   onToggleCam,
   onEndCall,
@@ -27,7 +30,11 @@ const CallScreen = ({
     }
   >
     {/* Stage */}
-    <div className="relative flex-1 min-h-0 p-3 sm:p-4">
+    <div
+      className={`relative flex-1 min-h-0 p-3 sm:p-4 transition-[padding] duration-200 ${
+        chatOpen ? "sm:pr-[392px]" : ""
+      }`}
+    >
       <div className="relative w-full h-full rounded-2xl overflow-hidden bg-[#3c4043]">
         <video
           ref={remoteVideoRef}
@@ -96,6 +103,13 @@ const CallScreen = ({
           active={camOn}
           icon={camOn ? "cam" : "camOff"}
           label={camOn ? "Turn off camera" : "Turn on camera"}
+        />
+        <ControlButton
+          onClick={onToggleChat}
+          pressed={chatOpen}
+          badge={chatOpen ? 0 : chatUnread}
+          icon="chat"
+          label="Chat"
         />
         <button
           onClick={onEndCall}

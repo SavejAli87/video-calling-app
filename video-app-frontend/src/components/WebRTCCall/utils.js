@@ -16,3 +16,6 @@ export const formatTime = (s) => {
   const sec = (s % 60).toString().padStart(2, "0");
   return `${m}:${sec}`;
 };
+
+export const formatClock = (ts) =>
+  new Date(ts).toLocaleTimeString([], { hour: "numeric", minute: "2-digit" });

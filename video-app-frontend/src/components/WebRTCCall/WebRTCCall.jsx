@@ -2,11 +2,17 @@ import React from "react";
 import useWebRTCCall from "./useWebRTCCall";
 import Lobby from "./Lobby";
 import CallScreen from "./CallScreen";
+import ChatPanel from "./ChatPanel";
 import IncomingCallModal from "./IncomingCallModal";
 import Toast from "./Toast";
 
 const WebRTCCall = () => {
   const call = useWebRTCCall();
+
+  const chatTarget = call.chatTarget;
+  const chatOnline = chatTarget
+    ? call.otherDevices.some((d) => d.socketId === chatTarget.socketId)
+    : false;
 
   return (
     <div
@@ -23,7 +29,9 @@ const WebRTCCall = () => {
         isConnected={call.isConnected}
         inCall={call.inCall}
         devices={call.otherDevices}
+        unread={call.unread}
         onCall={call.handleCallDevice}
+        onChat={call.openChat}
       />
 
       <CallScreen
@@ -37,9 +45,23 @@ const WebRTCCall = () => {
         micOn={call.micOn}
         camOn={call.camOn}
         seconds={call.seconds}
+        chatOpen={call.inCall && !!chatTarget}
+        chatUnread={call.unread[call.remoteSocketId] || 0}
+        onToggleChat={call.toggleCallChat}
         onToggleMic={call.toggleMic}
         onToggleCam={call.toggleCam}
         onEndCall={call.handleEndCall}
+      />
+
+      <ChatPanel
+        target={chatTarget}
+        messages={chatTarget ? call.messages[chatTarget.socketId] : []}
+        typing={chatTarget ? !!call.typing[chatTarget.socketId] : false}
+        online={chatOnline}
+        mode={call.inCall ? "call" : "lobby"}
+        onSend={call.sendMessage}
+        onTyping={call.sendTyping}
+        onClose={call.closeChat}
       />
 
       <IncomingCallModal

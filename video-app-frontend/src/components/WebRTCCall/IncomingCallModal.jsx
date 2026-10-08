@@ -7,7 +7,7 @@ const IncomingCallModal = ({ call, onAccept, onDecline }) => {
   const name = call.caller?.deviceName;
 
   return (
-    <div className="fixed inset-0 z-40 flex items-start sm:items-center justify-center bg-black/40 p-4">
+    <div className="fixed inset-0 z-50 flex items-start sm:items-center justify-center bg-black/40 p-4">
       <div
         role="dialog"
         aria-label="Incoming call"

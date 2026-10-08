@@ -1,31 +1,60 @@
-// const { setupChat } = require("./src/chatHandler");
+const { setupChat } = require("./src/chatHandler");
+
+const RING_TIMEOUT_MS = 45000;
 
 function setupSocket(io) {
   const devices = new Map(); // socketId -> { socketId, deviceId, deviceName, status }
-  const activeCalls = new Map(); // socketId -> inCallWithSocketId
+
+  // socketId -> { peer: socketId, state: "ringing" | "active" }
+  // Dono taraf (A->B aur B->A) entry rehti hai. Ye hi "busy" ka single source of truth hai.
+  const calls = new Map();
 
   function sendDeviceList() {
-    const list = Array.from(devices.values());
-    io.emit("device-list", list);
+    io.emit("device-list", Array.from(devices.values()));
   }
 
-  function freeDevice(socketId) {
-    if (devices.has(socketId)) {
-      devices.get(socketId).status = "available";
-    }
+  function setStatus(socketId, status) {
+    const d = devices.get(socketId);
+    if (d) d.status = status;
+  }
+
+  /**
+   * Ek socket ka call-link tod do, dono devices ko free karo.
+   * - expectedPeer diya ho to sirf tabhi todta hai jab link usi peer se ho
+   *   (taaki purana/stale event kisi doosri chal rahi call ko na tod de).
+   * - event diya ho to peer ko wo event bhej deta hai.
+   * Peer ka socketId return karta hai (ya null agar koi link tha hi nahi).
+   */
+  function endLink(socketId, expectedPeer, event) {
+    const link = calls.get(socketId);
+    if (!link) return null;
+    if (expectedPeer && link.peer !== expectedPeer) return null;
+
+    const peerId = link.peer;
+    calls.delete(socketId);
+    if (calls.get(peerId)?.peer === socketId) calls.delete(peerId);
+
+    setStatus(socketId, "available");
+    setStatus(peerId, "available");
+
+    if (event) io.to(peerId).emit(event);
+    return peerId;
   }
 
   io.on("connection", (socket) => {
     console.log(`[+] Connected: ${socket.id}`);
 
-
-    // Register Device
+    // ------------------------------------------------------ Register Device
     socket.on("register-device", (device) => {
-      // Purane duplicate sockets saaf karein
-      for (const [sId, dev] of devices.entries()) {
-        if (dev.deviceId === device.deviceId && sId !== socket.id) {
-          devices.delete(sId);
-          activeCalls.delete(sId);
+      if (!device || typeof device.deviceId !== "string") return;
+
+      // Same deviceId ke purane sockets hatao (reconnect / zombie sockets).
+      // Agar wo kisi call me the, to partner ko free karke batao.
+      for (const [oldId, dev] of devices.entries()) {
+        if (dev.deviceId === device.deviceId && oldId !== socket.id) {
+          endLink(oldId, null, "call-ended");
+          devices.delete(oldId);
+          io.sockets.sockets.get(oldId)?.disconnect(true);
         }
       }
 
@@ -33,112 +62,106 @@ function setupSocket(io) {
         socketId: socket.id,
         deviceId: device.deviceId,
         deviceName: device.deviceName,
-        status: "available",
+        status: calls.has(socket.id) ? "busy" : "available",
       });
 
       sendDeviceList();
     });
 
-    // Get Device List
+    // ----------------------------------------------------- Get Device List
     socket.on("get-devices", () => {
       socket.emit("device-list", Array.from(devices.values()));
     });
 
-    // Call Device
-    socket.on("call-device", ({ targetSocketId }) => {
+    // ---------------------------------------------------------- Call Device
+    socket.on("call-device", ({ targetSocketId } = {}) => {
       const caller = devices.get(socket.id);
       const target = devices.get(targetSocketId);
 
-      if (!target) {
+      if (!caller) {
+        return socket.emit("call-error", { message: "Device is not registered yet. Please refresh." });
+      }
+      if (!target || targetSocketId === socket.id) {
         return socket.emit("call-error", { message: "Device is no longer online." });
       }
-
-      if (target.status === "busy" || activeCalls.has(targetSocketId)) {
+      if (calls.has(socket.id)) {
+        return socket.emit("call-error", { message: "You are already in a call." });
+      }
+      if (calls.has(targetSocketId)) {
         return socket.emit("call-error", { message: "User is busy on another call." });
       }
 
+      // Ringing shuru: dono ko busy mark karo taaki koi teesra beech me call na kare
+      calls.set(socket.id, { peer: targetSocketId, state: "ringing" });
+      calls.set(targetSocketId, { peer: socket.id, state: "ringing" });
+      setStatus(socket.id, "busy");
+      setStatus(targetSocketId, "busy");
+      sendDeviceList();
+
       io.to(targetSocketId).emit("incoming-call", {
         callerSocketId: socket.id,
-        caller: caller,
+        caller,
       });
+
+      // Safety net: koi jawab na de to ringing khatam
+      setTimeout(() => {
+        const link = calls.get(socket.id);
+        if (link && link.peer === targetSocketId && link.state === "ringing") {
+          endLink(socket.id, targetSocketId, "call-ended");
+          socket.emit("call-error", { message: "No answer." });
+          sendDeviceList();
+        }
+      }, RING_TIMEOUT_MS);
     });
 
-    // Call Accepted
-    socket.on("call-accepted", ({ targetSocketId }) => {
-      activeCalls.set(socket.id, targetSocketId);
-      activeCalls.set(targetSocketId, socket.id);
+    // -------------------------------------------------------- Call Accepted
+    socket.on("call-accepted", ({ targetSocketId } = {}) => {
+      const link = calls.get(socket.id);
+      if (!link || link.peer !== targetSocketId || link.state !== "ringing") return; // stale event
 
-      if (devices.has(socket.id)) devices.get(socket.id).status = "busy";
-      if (devices.has(targetSocketId)) devices.get(targetSocketId).status = "busy";
+      link.state = "active";
+      const peerLink = calls.get(targetSocketId);
+      if (peerLink) peerLink.state = "active";
+
+      io.to(targetSocketId).emit("call-accepted", { targetSocketId: socket.id });
+    });
+
+    // -------------------------------------------------------- Call Rejected
+    socket.on("call-rejected", ({ targetSocketId } = {}) => {
+      endLink(socket.id, targetSocketId, "call-rejected");
       sendDeviceList();
-
-      io.to(targetSocketId).emit("call-accepted", {
-        targetSocketId: socket.id,
-      });
     });
 
-    // Call Rejected
-    socket.on("call-rejected", ({ targetSocketId }) => {
-      freeDevice(socket.id);
-      if (targetSocketId) {
-        freeDevice(targetSocketId);
-        io.to(targetSocketId).emit("call-rejected");
-      }
-      sendDeviceList();
-    });
-
-    // WebRTC Offer
+    // ------------------------------------------------------- WebRTC Signals
     socket.on("offer", ({ targetSocketId, offer }) => {
-      io.to(targetSocketId).emit("offer", {
-        callerSocketId: socket.id,
-        offer: offer,
-      });
+      if (calls.get(socket.id)?.peer !== targetSocketId) return;
+      io.to(targetSocketId).emit("offer", { callerSocketId: socket.id, offer });
     });
 
-    // WebRTC Answer
     socket.on("answer", ({ targetSocketId, answer }) => {
-      io.to(targetSocketId).emit("answer", {
-        callerSocketId: socket.id,
-        answer: answer,
-      });
+      if (calls.get(socket.id)?.peer !== targetSocketId) return;
+      io.to(targetSocketId).emit("answer", { callerSocketId: socket.id, answer });
     });
 
-    // ICE Candidate
     socket.on("ice-candidate", ({ targetSocketId, candidate }) => {
-      io.to(targetSocketId).emit("ice-candidate", {
-        callerSocketId: socket.id,
-        candidate: candidate,
-      });
+      if (calls.get(socket.id)?.peer !== targetSocketId) return;
+      io.to(targetSocketId).emit("ice-candidate", { callerSocketId: socket.id, candidate });
     });
 
-    // End Call
-    socket.on("end-call", ({ targetSocketId }) => {
-      activeCalls.delete(socket.id);
-      freeDevice(socket.id);
-
-      if (targetSocketId) {
-        activeCalls.delete(targetSocketId);
-        freeDevice(targetSocketId);
-        io.to(targetSocketId).emit("call-ended");
-      }
+    // -------------------------------------------------------------- End Call
+    // Client ka targetSocketId ignore: server khud jaanta hai ki call kiske saath hai.
+    socket.on("end-call", () => {
+      endLink(socket.id, null, "call-ended");
       sendDeviceList();
     });
 
-    // chat Handler
-    // setupChat(io, socket);
+    // ------------------------------------------------------------------ Chat
+    setupChat(io, socket, devices);
 
-    // Disconnect
+    // ------------------------------------------------------------ Disconnect
     socket.on("disconnect", () => {
       console.log(`[-] Disconnected: ${socket.id}`);
-
-      const peerSocketId = activeCalls.get(socket.id);
-      if (peerSocketId) {
-        activeCalls.delete(peerSocketId);
-        freeDevice(peerSocketId);
-        io.to(peerSocketId).emit("call-ended");
-      }
-
-      activeCalls.delete(socket.id);
+      endLink(socket.id, null, "call-ended");
       devices.delete(socket.id);
       sendDeviceList();
     });

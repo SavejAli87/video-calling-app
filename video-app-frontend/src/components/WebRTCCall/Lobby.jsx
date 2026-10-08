@@ -10,7 +10,9 @@ const Lobby = ({
   isConnected,
   inCall,
   devices,
+  unread = {},
   onCall,
+  onChat,
 }) => {
   const [clock, setClock] = useState(new Date());
 
@@ -107,9 +109,23 @@ const Lobby = ({
                       <div
                         className={`text-sm ${busy ? "text-[#d93025]" : "text-[#188038]"}`}
                       >
-                        {busy ? "In a call" : "Available"}
+                        {busy ? "Busy" : "Available"}
                       </div>
                     </div>
+                    <button
+                      onClick={() => onChat(device)}
+                      disabled={!isConnected}
+                      aria-label={`Message ${device.deviceName}`}
+                      title="Message"
+                      className="relative w-10 h-10 rounded-full border border-[#dadce0] text-[#1a73e8] hover:bg-[#e8f0fe] disabled:opacity-40 disabled:cursor-not-allowed flex items-center justify-center transition-colors focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[#1a73e8]"
+                    >
+                      <Icon name="chat" className="w-5 h-5" />
+                      {unread[device.socketId] > 0 && (
+                        <span className="absolute -top-1 -right-1 min-w-[18px] h-[18px] px-1 rounded-full bg-[#d93025] text-white text-[11px] leading-[18px] font-medium text-center">
+                          {unread[device.socketId] > 9 ? "9+" : unread[device.socketId]}
+                        </span>
+                      )}
+                    </button>
                     <button
                       disabled={inCall || busy || !isConnected}
                       onClick={() => onCall(device)}

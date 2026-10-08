@@ -2,8 +2,12 @@ import { useState, useEffect, useRef, useCallback } from "react";
 import { io } from "socket.io-client";
 import { SERVER_URL, RTC_CONFIG } from "./constants";
 
+const RING_TIMEOUT_MS = 30000;
+
+const makeId = () => `${Date.now()}-${Math.random().toString(36).slice(2, 10)}`;
+
 /**
- * Saara signaling + WebRTC logic yaha hai.
+ * Saara signaling + WebRTC + chat logic yaha hai.
  * UI components sirf iska return value use karte hain.
  */
 const useWebRTCCall = () => {
@@ -18,9 +22,16 @@ const useWebRTCCall = () => {
   const [camOn, setCamOn] = useState(true);
   const [remoteReady, setRemoteReady] = useState(false);
   const [remoteName, setRemoteName] = useState("");
+  const [remoteSocketId, setRemoteSocketId] = useState("");
   const [incomingCall, setIncomingCall] = useState(null);
   const [toast, setToast] = useState("");
   const [seconds, setSeconds] = useState(0);
+
+  // Chat state
+  const [chatTarget, setChatTarget] = useState(null); // { socketId, deviceName } | null
+  const [messages, setMessages] = useState({}); // { [socketId]: Message[] }
+  const [unread, setUnread] = useState({}); // { [socketId]: number }
+  const [typing, setTyping] = useState({}); // { [socketId]: boolean }
 
   const socketRef = useRef(null);
   const peerRef = useRef(null);
@@ -31,6 +42,10 @@ const useWebRTCCall = () => {
   const pendingIceCandidatesRef = useRef([]);
   const incomingRef = useRef(null);
   const toastTimerRef = useRef(null);
+  const ringTimerRef = useRef(null);
+  const callAcceptedRef = useRef(false);
+  const chatTargetRef = useRef(null);
+  const typingTimersRef = useRef({});
 
   const localVideoRef = useRef(null);
   const remoteVideoRef = useRef(null);
@@ -54,6 +69,9 @@ const useWebRTCCall = () => {
 
   // -------------------------------------------------------- Call cleanup
   const cleanupCall = useCallback(() => {
+    clearTimeout(ringTimerRef.current);
+    callAcceptedRef.current = false;
+
     if (peerRef.current) {
       peerRef.current.onicecandidate = null;
       peerRef.current.ontrack = null;
@@ -86,8 +104,22 @@ const useWebRTCCall = () => {
     setMicOn(true);
     setCamOn(true);
     setRemoteName("");
+    setRemoteSocketId("");
     setStatus("Ready for another call");
+
+    // Server se fresh device list mangao, taaki busy/available status sahi dikhe
+    if (socketRef.current?.connected) socketRef.current.emit("get-devices");
   }, []);
+
+  // Server ko bhi batao ki call khatam (sirf local cleanup kaafi nahi hai)
+  const leaveCall = useCallback(() => {
+    if (currentTargetRef.current && socketRef.current?.connected) {
+      socketRef.current.emit("end-call", {
+        targetSocketId: currentTargetRef.current,
+      });
+    }
+    cleanupCall();
+  }, [cleanupCall]);
 
   // ------------------------------------------------ Flush queued ICE
   const flushPendingIceCandidates = useCallback(async () => {
@@ -218,20 +250,20 @@ const useWebRTCCall = () => {
       } else if (state === "disconnected") {
         setStatus("Connection unstable, trying to recover...");
         setTimeout(() => {
-          if (peerRef.current?.connectionState === "disconnected") {
-            cleanupCall();
+          if (peerRef.current === peer && peer.connectionState === "disconnected") {
+            leaveCall();
           }
         }, 5000);
       } else if (state === "failed") {
         setStatus("Connection failed");
         showToast("Connection failed. Try calling again.");
-        cleanupCall();
+        leaveCall();
       }
     };
 
     peerRef.current = peer;
     return peer;
-  }, [cleanupCall, showToast]);
+  }, [leaveCall, showToast]);
 
   // --------------------------------------------- Incoming call accept/decline
   const acceptCall = useCallback(async () => {
@@ -245,6 +277,7 @@ const useWebRTCCall = () => {
     try {
       currentTargetRef.current = data.callerSocketId;
       setRemoteName(data.caller?.deviceName || "Unknown device");
+      setRemoteSocketId(data.callerSocketId);
       setInCall(true);
       setStatus("Starting camera...");
 
@@ -272,12 +305,93 @@ const useWebRTCCall = () => {
     setIncomingCall(null);
   }, []);
 
+  // ------------------------------------------------------------------ Chat
+  const openChat = useCallback((device) => {
+    if (!device?.socketId) return;
+    const target = { socketId: device.socketId, deviceName: device.deviceName };
+    chatTargetRef.current = target;
+    setChatTarget(target);
+    setUnread((prev) => {
+      if (!prev[device.socketId]) return prev;
+      const next = { ...prev };
+      delete next[device.socketId];
+      return next;
+    });
+  }, []);
+
+  const closeChat = useCallback(() => {
+    chatTargetRef.current = null;
+    setChatTarget(null);
+  }, []);
+
+  // Call ke andar chat button: peer ke saath chat open/close
+  const toggleCallChat = useCallback(() => {
+    if (!remoteSocketId) return;
+    if (chatTarget?.socketId === remoteSocketId) {
+      closeChat();
+    } else {
+      openChat({ socketId: remoteSocketId, deviceName: remoteName });
+    }
+  }, [remoteSocketId, remoteName, chatTarget, openChat, closeChat]);
+
+  const updateMessageStatus = useCallback((targetSocketId, clientId, status) => {
+    setMessages((prev) => {
+      const list = prev[targetSocketId];
+      if (!list) return prev;
+      return {
+        ...prev,
+        [targetSocketId]: list.map((m) => (m.id === clientId ? { ...m, status } : m)),
+      };
+    });
+  }, []);
+
+  const sendMessage = useCallback(
+    (text) => {
+      const target = chatTargetRef.current;
+      const socket = socketRef.current;
+      const clean = (text || "").trim();
+      if (!target || !clean) return;
+
+      if (!socket?.connected) {
+        showToast("Server connection lost. Message not sent.");
+        return;
+      }
+
+      const clientId = makeId();
+      setMessages((prev) => ({
+        ...prev,
+        [target.socketId]: [
+          ...(prev[target.socketId] || []),
+          { id: clientId, sender: "me", text: clean, timestamp: Date.now(), status: "sending" },
+        ],
+      }));
+
+      socket.emit("send-private-message", {
+        targetSocketId: target.socketId,
+        message: clean,
+        clientId,
+      });
+    },
+    [showToast]
+  );
+
+  const sendTyping = useCallback((isTyping) => {
+    const target = chatTargetRef.current;
+    if (!target || !socketRef.current?.connected) return;
+    socketRef.current.emit("typing-indicator", {
+      targetSocketId: target.socketId,
+      isTyping,
+    });
+  }, []);
+
   // ------------------------------------------------------ Socket lifecycle
   useEffect(() => {
-    let devId = localStorage.getItem("deviceId");
+    // sessionStorage: har browser tab apna alag device hai (same browser ke 2 tab
+    // ab ek-doosre ko evict nahi karte), aur refresh par naam wahi rehta hai.
+    let devId = sessionStorage.getItem("deviceId");
     if (!devId) {
       devId = "device-" + Date.now() + "-" + Math.random().toString(36).substring(2, 10);
-      localStorage.setItem("deviceId", devId);
+      sessionStorage.setItem("deviceId", devId);
     }
     const devName = "Device-" + devId.slice(-5).toUpperCase();
     setDeviceName(devName);
@@ -289,8 +403,18 @@ const useWebRTCCall = () => {
     });
 
     socketRef.current = socket;
+    const typingTimers = typingTimersRef.current;
 
     socket.on("connect", () => {
+      // Reconnect hone par server purani call khatam kar chuka hota hai,
+      // lekin hume "call-ended" mila nahi (hum offline the) -> local state saaf karo.
+      if (currentTargetRef.current || incomingRef.current) {
+        incomingRef.current = null;
+        setIncomingCall(null);
+        cleanupCall();
+        showToast("Connection was lost. The call has ended.");
+      }
+
       setSocketId(socket.id);
       setIsConnected(true);
       setStatus("Connected to signaling server");
@@ -327,6 +451,8 @@ const useWebRTCCall = () => {
     // Caller side
     socket.on("call-accepted", async (data) => {
       try {
+        clearTimeout(ringTimerRef.current);
+        callAcceptedRef.current = true;
         currentTargetRef.current = data.targetSocketId;
         const localStream = await startCamera();
 
@@ -345,7 +471,7 @@ const useWebRTCCall = () => {
         setStatus("Connecting...");
       } catch (err) {
         console.error("Call offer creation error:", err);
-        cleanupCall();
+        leaveCall(); // partner ko bhi batao, warna wo call me atka rehta hai
       }
     });
 
@@ -374,7 +500,7 @@ const useWebRTCCall = () => {
         setStatus("Connecting...");
       } catch (err) {
         console.error("Offer error:", err);
-        cleanupCall();
+        leaveCall();
       }
     });
 
@@ -422,7 +548,48 @@ const useWebRTCCall = () => {
       showToast("The call has ended.");
     });
 
+    // ------------------------------------------------------------- Chat events
+    socket.on("receive-private-message", (m) => {
+      const from = m.senderSocketId;
+
+      setMessages((prev) => ({
+        ...prev,
+        [from]: [
+          ...(prev[from] || []),
+          { id: m.id, sender: "them", text: m.message, timestamp: m.timestamp },
+        ],
+      }));
+      setTyping((prev) => ({ ...prev, [from]: false }));
+
+      // Is device ka chat abhi khula nahi hai -> unread badge + toast
+      if (chatTargetRef.current?.socketId !== from) {
+        setUnread((prev) => ({ ...prev, [from]: (prev[from] || 0) + 1 }));
+        showToast(`New message from ${m.senderName || "a device"}`);
+      }
+    });
+
+    socket.on("user-typing", ({ senderSocketId, isTyping }) => {
+      clearTimeout(typingTimers[senderSocketId]);
+      setTyping((prev) => ({ ...prev, [senderSocketId]: Boolean(isTyping) }));
+      if (isTyping) {
+        // agar "stopped typing" event miss ho jaye to indicator khud hat jaye
+        typingTimers[senderSocketId] = setTimeout(() => {
+          setTyping((prev) => ({ ...prev, [senderSocketId]: false }));
+        }, 4000);
+      }
+    });
+
+    socket.on("message-sent-ack", ({ targetSocketId, clientId }) => {
+      updateMessageStatus(targetSocketId, clientId, "delivered");
+    });
+
+    socket.on("message-error", ({ targetSocketId, clientId, message }) => {
+      updateMessageStatus(targetSocketId, clientId, "failed");
+      showToast(message || "Message was not delivered.");
+    });
+
     return () => {
+      Object.values(typingTimers).forEach(clearTimeout);
       cleanupCall();
       socket.disconnect();
     };
@@ -431,7 +598,9 @@ const useWebRTCCall = () => {
     addLocalTracks,
     startCamera,
     cleanupCall,
+    leaveCall,
     flushPendingIceCandidates,
+    updateMessageStatus,
     showToast,
   ]);
 
@@ -442,25 +611,29 @@ const useWebRTCCall = () => {
         showToast("Server connection lost. Wait until it reconnects.");
         return;
       }
-      if (inCall) return;
+      if (inCall || incomingRef.current) return;
 
+      callAcceptedRef.current = false;
       currentTargetRef.current = device.socketId;
       setRemoteName(device.deviceName);
+      setRemoteSocketId(device.socketId);
       setInCall(true);
       setStatus(`Calling ${device.deviceName}...`);
       socketRef.current.emit("call-device", { targetSocketId: device.socketId });
+
+      // Koi jawab na de to ring cancel (callee ka popup bhi band ho jata hai)
+      clearTimeout(ringTimerRef.current);
+      ringTimerRef.current = setTimeout(() => {
+        if (!callAcceptedRef.current && currentTargetRef.current === device.socketId) {
+          showToast(`${device.deviceName} did not answer.`);
+          leaveCall();
+        }
+      }, RING_TIMEOUT_MS);
     },
-    [inCall, showToast]
+    [inCall, showToast, leaveCall]
   );
 
-  const handleEndCall = useCallback(() => {
-    if (currentTargetRef.current && socketRef.current?.connected) {
-      socketRef.current.emit("end-call", {
-        targetSocketId: currentTargetRef.current,
-      });
-    }
-    cleanupCall();
-  }, [cleanupCall]);
+  const handleEndCall = leaveCall;
 
   const otherDevices = devices.filter((d) => d.socketId !== socketId);
 
@@ -476,9 +649,15 @@ const useWebRTCCall = () => {
     camOn,
     remoteReady,
     remoteName,
+    remoteSocketId,
     incomingCall,
     toast,
     seconds,
+    // chat state
+    chatTarget,
+    messages,
+    unread,
+    typing,
     // refs
     localVideoRef,
     remoteVideoRef,
@@ -489,6 +668,12 @@ const useWebRTCCall = () => {
     declineCall,
     handleCallDevice,
     handleEndCall,
+    // chat actions
+    openChat,
+    closeChat,
+    toggleCallChat,
+    sendMessage,
+    sendTyping,
   };
 };
 

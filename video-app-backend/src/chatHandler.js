@@ -1,39 +1,53 @@
 /**
  * chatHandler.js
- * Standalone 1-to-1 Instant Messaging Module
+ * 1-to-1 instant messaging (call ke andar aur lobby dono me kaam karta hai)
  */
+const crypto = require("crypto");
 
-function setupChat(io, socket) {
+const MAX_MESSAGE_LENGTH = 1000;
+
+function setupChat(io, socket, devices) {
   // 1. Private message bhejna
-  socket.on("send-private-message", (data) => {
+  socket.on("send-private-message", (data = {}) => {
     try {
-      const { targetSocketId, message, senderName, time } = data;
+      const { targetSocketId, message, clientId } = data;
+      const text = typeof message === "string" ? message.trim().slice(0, MAX_MESSAGE_LENGTH) : "";
+      const sender = devices.get(socket.id);
 
-      if (!targetSocketId || !message || !message.trim()) {
-        return;
+      if (!sender || !targetSocketId || !text) return;
+
+      if (!devices.has(targetSocketId)) {
+        return socket.emit("message-error", {
+          targetSocketId,
+          clientId,
+          message: "Device is offline. Message was not delivered.",
+        });
       }
 
-      // Target socket ko direct message forward karna
+      const timestamp = Date.now();
+
       io.to(targetSocketId).emit("receive-private-message", {
+        id: crypto.randomUUID(),
         senderSocketId: socket.id,
-        senderName: senderName || "Anonymous Device",
-        message: message.trim(),
-        time: time || new Date().toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" }),
+        senderName: sender.deviceName, // server se aata hai, client spoof nahi kar sakta
+        message: text,
+        timestamp,
       });
 
-      // Sender ko delivery acknowledge karna (Optional)
       socket.emit("message-sent-ack", {
         targetSocketId,
+        clientId,
         status: "delivered",
+        timestamp,
       });
     } catch (err) {
       console.error("Chat forward error:", err);
     }
   });
 
-  // 2. Typing indicator event
-  socket.on("typing-indicator", ({ targetSocketId, isTyping }) => {
-    if (targetSocketId) {
+  // 2. Typing indicator
+  socket.on("typing-indicator", ({ targetSocketId, isTyping } = {}) => {
+    if (targetSocketId && devices.has(targetSocketId)) {
       io.to(targetSocketId).emit("user-typing", {
         senderSocketId: socket.id,
         isTyping: Boolean(isTyping),
