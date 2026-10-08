@@ -16,7 +16,7 @@ const WebRTCCall = () => {
 
   return (
     <div
-      className="min-h-screen bg-white text-[#202124]"
+      className="min-h-dvh bg-white text-[#202124]"
       style={{
         fontFamily: "'Google Sans', 'Product Sans', Roboto, 'Segoe UI', Arial, sans-serif",
       }}
@@ -58,6 +58,7 @@ const WebRTCCall = () => {
         messages={chatTarget ? call.messages[chatTarget.socketId] : []}
         typing={chatTarget ? !!call.typing[chatTarget.socketId] : false}
         online={chatOnline}
+        chatSupported={call.chatSupported}
         mode={call.inCall ? "call" : "lobby"}
         onSend={call.sendMessage}
         onTyping={call.sendTyping}

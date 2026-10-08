@@ -31,8 +31,8 @@ const CallScreen = ({
   >
     {/* Stage */}
     <div
-      className={`relative flex-1 min-h-0 p-3 sm:p-4 transition-[padding] duration-200 ${
-        chatOpen ? "sm:pr-[392px]" : ""
+      className={`relative flex-1 min-h-0 p-2 sm:p-4 transition-[padding] duration-200 ${
+        chatOpen ? "lg:pr-[392px]" : ""
       }`}
     >
       <div className="relative w-full h-full rounded-2xl overflow-hidden bg-[#3c4043]">
@@ -54,13 +54,13 @@ const CallScreen = ({
         )}
 
         {remoteReady && (
-          <div className="absolute left-4 bottom-4 rounded-md bg-black/60 px-2.5 py-1 text-sm">
+          <div className="absolute left-2 bottom-2 sm:left-4 sm:bottom-4 max-w-[45%] truncate rounded-md bg-black/60 px-2.5 py-1 text-sm">
             {remoteName}
           </div>
         )}
 
         {/* Self view */}
-        <div className="absolute right-3 bottom-3 sm:right-4 sm:bottom-4 w-36 sm:w-60 aspect-video rounded-xl overflow-hidden bg-[#202124] border border-white/10 shadow-xl">
+        <div className="absolute right-2 bottom-2 sm:right-4 sm:bottom-4 w-28 sm:w-48 lg:w-60 aspect-video rounded-xl overflow-hidden bg-[#202124] border border-white/10 shadow-xl">
           <video
             ref={localVideoRef}
             autoPlay
@@ -84,14 +84,17 @@ const CallScreen = ({
     </div>
 
     {/* Bottom bar */}
-    <div className="h-20 shrink-0 grid grid-cols-3 items-center px-4 sm:px-6">
+    <div
+      className="min-h-20 shrink-0 grid grid-cols-3 items-center px-3 sm:px-6"
+      style={{ paddingBottom: "env(safe-area-inset-bottom)" }}
+    >
       <div className="hidden sm:flex items-center gap-3 text-[15px] min-w-0">
         <span className="tabular-nums">{remoteReady ? formatTime(seconds) : "--:--"}</span>
         <span className="w-px h-4 bg-white/20" />
         <span className="truncate text-[#bdc1c6]">{remoteName}</span>
       </div>
 
-      <div className="col-span-3 sm:col-span-1 flex items-center justify-center gap-3">
+      <div className="col-span-3 sm:col-span-1 flex items-center justify-center gap-2 sm:gap-3">
         <ControlButton
           onClick={onToggleMic}
           active={micOn}

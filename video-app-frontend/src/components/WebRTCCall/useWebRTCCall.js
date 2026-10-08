@@ -3,6 +3,7 @@ import { io } from "socket.io-client";
 import { SERVER_URL, RTC_CONFIG } from "./constants";
 
 const RING_TIMEOUT_MS = 30000;
+const ACK_TIMEOUT_MS = 6000;
 
 const makeId = () => `${Date.now()}-${Math.random().toString(36).slice(2, 10)}`;
 
@@ -32,6 +33,7 @@ const useWebRTCCall = () => {
   const [messages, setMessages] = useState({}); // { [socketId]: Message[] }
   const [unread, setUnread] = useState({}); // { [socketId]: number }
   const [typing, setTyping] = useState({}); // { [socketId]: boolean }
+  const [chatSupported, setChatSupported] = useState(false); // server "server-info" bhejta hai
 
   const socketRef = useRef(null);
   const peerRef = useRef(null);
@@ -46,6 +48,7 @@ const useWebRTCCall = () => {
   const callAcceptedRef = useRef(false);
   const chatTargetRef = useRef(null);
   const typingTimersRef = useRef({});
+  const chatSupportedRef = useRef(false);
 
   const localVideoRef = useRef(null);
   const remoteVideoRef = useRef(null);
@@ -345,6 +348,19 @@ const useWebRTCCall = () => {
     });
   }, []);
 
+  const failIfPending = useCallback((targetSocketId, clientId) => {
+    setMessages((prev) => {
+      const list = prev[targetSocketId];
+      if (!list) return prev;
+      return {
+        ...prev,
+        [targetSocketId]: list.map((m) =>
+          m.id === clientId && m.status === "sending" ? { ...m, status: "failed" } : m
+        ),
+      };
+    });
+  }, []);
+
   const sendMessage = useCallback(
     (text) => {
       const target = chatTargetRef.current;
@@ -354,6 +370,11 @@ const useWebRTCCall = () => {
 
       if (!socket?.connected) {
         showToast("Server connection lost. Message not sent.");
+        return;
+      }
+
+      if (!chatSupportedRef.current) {
+        showToast("Chat isn't available: the backend server needs to be updated and redeployed.");
         return;
       }
 
@@ -371,8 +392,11 @@ const useWebRTCCall = () => {
         message: clean,
         clientId,
       });
+
+      // Ack na aaye to "Not delivered" dikhao (silently atka na rahe)
+      setTimeout(() => failIfPending(target.socketId, clientId), ACK_TIMEOUT_MS);
     },
-    [showToast]
+    [showToast, failIfPending]
   );
 
   const sendTyping = useCallback((isTyping) => {
@@ -405,7 +429,16 @@ const useWebRTCCall = () => {
     socketRef.current = socket;
     const typingTimers = typingTimersRef.current;
 
+    socket.on("server-info", (info) => {
+      const supported = Boolean(info?.chat);
+      chatSupportedRef.current = supported;
+      setChatSupported(supported);
+    });
+
     socket.on("connect", () => {
+      chatSupportedRef.current = false;
+      setChatSupported(false);
+
       // Reconnect hone par server purani call khatam kar chuka hota hai,
       // lekin hume "call-ended" mila nahi (hum offline the) -> local state saaf karo.
       if (currentTargetRef.current || incomingRef.current) {
@@ -424,6 +457,7 @@ const useWebRTCCall = () => {
     });
 
     socket.on("disconnect", (reason) => {
+      chatSupportedRef.current = false;
       setIsConnected(false);
       setStatus(`Disconnected from server (${reason})`);
     });
@@ -658,6 +692,7 @@ const useWebRTCCall = () => {
     messages,
     unread,
     typing,
+    chatSupported,
     // refs
     localVideoRef,
     remoteVideoRef,

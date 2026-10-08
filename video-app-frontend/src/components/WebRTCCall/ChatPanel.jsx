@@ -13,6 +13,7 @@ const ChatPanel = ({
   messages = [],
   typing = false,
   online = true,
+  chatSupported = true,
   mode = "lobby",
   onSend,
   onTyping,
@@ -72,7 +73,7 @@ const ChatPanel = ({
   const handleSubmit = (e) => {
     e.preventDefault();
     const clean = text.trim();
-    if (!clean || !online) return;
+    if (!clean || !online || !chatSupported) return;
     onSend(clean);
     setText("");
     stopTyping();
@@ -80,8 +81,8 @@ const ChatPanel = ({
 
   const position =
     mode === "call"
-      ? "inset-x-0 top-0 bottom-20 sm:inset-x-auto sm:right-4 sm:top-4 sm:bottom-24 sm:w-[360px] sm:rounded-2xl"
-      : "inset-0 sm:inset-x-auto sm:right-6 sm:bottom-6 sm:top-auto sm:w-[360px] sm:h-[520px] sm:rounded-2xl";
+      ? "inset-x-0 top-0 bottom-[calc(5rem+env(safe-area-inset-bottom))] sm:inset-x-auto sm:right-4 sm:top-4 sm:bottom-24 sm:w-[360px] sm:rounded-2xl"
+      : "inset-0 pb-[env(safe-area-inset-bottom)] sm:pb-0 sm:inset-x-auto sm:right-6 sm:bottom-6 sm:top-auto sm:w-[360px] sm:h-[520px] sm:rounded-2xl";
 
   return (
     <div
@@ -147,8 +148,14 @@ const ChatPanel = ({
       </div>
 
       {/* Typing + offline notice */}
-      <div className="px-4 h-5 text-xs text-[#5f6368]">
-        {!online ? "Device is offline. Messages can't be delivered." : typing ? `${target.deviceName} is typing…` : ""}
+      <div className={`px-4 min-h-5 text-xs ${chatSupported ? "text-[#5f6368]" : "text-[#d93025]"}`}>
+        {!chatSupported
+          ? "Chat is unavailable: the server needs to be updated."
+          : !online
+            ? "Device is offline. Messages can't be delivered."
+            : typing
+              ? `${target.deviceName} is typing…`
+              : ""}
       </div>
 
       {/* Input */}
@@ -161,13 +168,13 @@ const ChatPanel = ({
             onChange={handleChange}
             onKeyDown={(e) => e.key === "Escape" && onClose()}
             maxLength={1000}
-            disabled={!online}
+            disabled={!online || !chatSupported}
             placeholder="Send a message"
             className="flex-1 min-w-0 bg-transparent text-sm outline-none placeholder:text-[#5f6368] disabled:opacity-50"
           />
           <button
             type="submit"
-            disabled={!text.trim() || !online}
+            disabled={!text.trim() || !online || !chatSupported}
             aria-label="Send message"
             className="w-9 h-9 rounded-full flex items-center justify-center text-[#1a73e8] hover:bg-[#e2e5e9] disabled:text-[#9aa0a6] disabled:hover:bg-transparent disabled:cursor-not-allowed"
           >

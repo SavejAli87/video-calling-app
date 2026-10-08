@@ -1,6 +1,7 @@
 const { setupChat } = require("./src/chatHandler");
 
 const RING_TIMEOUT_MS = 45000;
+const SERVER_VERSION = 2;
 
 function setupSocket(io) {
   const devices = new Map(); // socketId -> { socketId, deviceId, deviceName, status }
@@ -43,6 +44,9 @@ function setupSocket(io) {
 
   io.on("connection", (socket) => {
     console.log(`[+] Connected: ${socket.id}`);
+
+    // Frontend isse jaanta hai ki ye server chat support karta hai (purana deploy detect karne ke liye)
+    socket.emit("server-info", { chat: true, version: SERVER_VERSION });
 
     // ------------------------------------------------------ Register Device
     socket.on("register-device", (device) => {
