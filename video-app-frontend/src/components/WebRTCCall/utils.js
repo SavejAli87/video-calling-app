@@ -19,3 +19,15 @@ export const formatTime = (s) => {
 
 export const formatClock = (ts) =>
   new Date(ts).toLocaleTimeString([], { hour: "numeric", minute: "2-digit" });
+
+// WhatsApp jaise date separator: Today / Yesterday / 12 Oct 2026
+export const dayLabel = (ts) => {
+  const d = new Date(ts);
+  const startOf = (x) => new Date(x.getFullYear(), x.getMonth(), x.getDate()).getTime();
+  const diffDays = Math.round((startOf(new Date()) - startOf(d)) / 86400000);
+  if (diffDays === 0) return "Today";
+  if (diffDays === 1) return "Yesterday";
+  return d.toLocaleDateString([], { day: "numeric", month: "short", year: "numeric" });
+};
+
+export const isSameDay = (a, b) => dayLabel(a) === dayLabel(b);
