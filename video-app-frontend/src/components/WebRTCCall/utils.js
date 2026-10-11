@@ -1,9 +1,15 @@
 const AVATAR_COLORS = ["#1a73e8", "#188038", "#e37400", "#a142f4", "#d93025", "#00897b"];
 
+// "Savej Ali" -> "SA", "Savej" -> "SA", "Device-XSGMA" -> "XS"
 export const initialsOf = (name = "") => {
-  const code = name.replace(/^Device-/i, "");
-  return (code.slice(0, 2) || "?").toUpperCase();
+  const parts = name.replace(/^Device-/i, "").trim().split(/\s+/).filter(Boolean);
+  if (parts.length >= 2) return (parts[0][0] + parts[1][0]).toUpperCase();
+  return (parts[0] || "?").slice(0, 2).toUpperCase();
 };
+
+// Extra spaces hatao, trim karo, max length lagao
+export const normalizeName = (raw, max = 30) =>
+  String(raw ?? "").replace(/\s+/g, " ").trim().slice(0, max);
 
 export const colorOf = (name = "") => {
   let h = 0;

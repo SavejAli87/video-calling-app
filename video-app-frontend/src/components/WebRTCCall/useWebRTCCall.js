@@ -1,9 +1,18 @@
 import { useState, useEffect, useRef, useCallback } from "react";
 import { io } from "socket.io-client";
-import { SERVER_URL, RTC_CONFIG } from "./constants";
+import { SERVER_URL, RTC_CONFIG, NAME_KEY, MAX_NAME_LENGTH } from "./constants";
+import { normalizeName } from "./utils";
 
 const RING_TIMEOUT_MS = 30000;
 const ACK_TIMEOUT_MS = 6000;
+
+const loadName = () => {
+  try {
+    return normalizeName(localStorage.getItem(NAME_KEY), MAX_NAME_LENGTH);
+  } catch {
+    return "";
+  }
+};
 
 const makeId = () => `${Date.now()}-${Math.random().toString(36).slice(2, 10)}`;
 
@@ -14,7 +23,7 @@ const makeId = () => `${Date.now()}-${Math.random().toString(36).slice(2, 10)}`;
 const useWebRTCCall = () => {
   const [socketId, setSocketId] = useState("");
   const [isConnected, setIsConnected] = useState(false);
-  const [deviceName, setDeviceName] = useState("");
+  const [userName, setUserName] = useState(loadName); // saved name (localStorage)
   const [status, setStatus] = useState("Connecting to signaling server...");
   const [devices, setDevices] = useState([]);
   const [inCall, setInCall] = useState(false);
@@ -49,6 +58,8 @@ const useWebRTCCall = () => {
   const chatTargetRef = useRef(null);
   const typingTimersRef = useRef({});
   const chatSupportedRef = useRef(false);
+  const userNameRef = useRef(userName);
+  const registerRef = useRef(null);
 
   const localVideoRef = useRef(null);
   const remoteVideoRef = useRef(null);
@@ -417,9 +428,6 @@ const useWebRTCCall = () => {
       devId = "device-" + Date.now() + "-" + Math.random().toString(36).substring(2, 10);
       sessionStorage.setItem("deviceId", devId);
     }
-    const devName = "Device-" + devId.slice(-5).toUpperCase();
-    setDeviceName(devName);
-
     const socket = io(SERVER_URL, {
       transports: ["websocket", "polling"],
       reconnectionAttempts: 10,
@@ -428,6 +436,13 @@ const useWebRTCCall = () => {
 
     socketRef.current = socket;
     const typingTimers = typingTimersRef.current;
+
+    // Naam set hone ke baad hi server par register hote hain (naam badalne par dobara bhi yahi chalta hai)
+    registerRef.current = () => {
+      const name = userNameRef.current;
+      if (!name || !socket.connected) return;
+      socket.emit("register-device", { deviceId: devId, deviceName: name });
+    };
 
     socket.on("server-info", (info) => {
       const supported = Boolean(info?.chat);
@@ -452,7 +467,7 @@ const useWebRTCCall = () => {
       setIsConnected(true);
       setStatus("Connected to signaling server");
 
-      socket.emit("register-device", { deviceId: devId, deviceName: devName });
+      registerRef.current?.();
       socket.emit("get-devices");
     });
 
@@ -623,6 +638,7 @@ const useWebRTCCall = () => {
     });
 
     return () => {
+      registerRef.current = null;
       Object.values(typingTimers).forEach(clearTimeout);
       cleanupCall();
       socket.disconnect();
@@ -637,6 +653,24 @@ const useWebRTCCall = () => {
     updateMessageStatus,
     showToast,
   ]);
+
+  // ------------------------------------------------------------ Display name
+  const saveName = useCallback((raw) => {
+    const clean = normalizeName(raw, MAX_NAME_LENGTH);
+    if (!clean) return false;
+
+    try {
+      localStorage.setItem(NAME_KEY, clean);
+    } catch {
+      /* private mode: is session me naam chalega, par save nahi hoga */
+    }
+    userNameRef.current = clean;
+    setUserName(clean);
+
+    registerRef.current?.(); // server ko naya naam batao
+    socketRef.current?.emit("get-devices");
+    return true;
+  }, []);
 
   // ------------------------------------------------- Call / end call actions
   const handleCallDevice = useCallback(
@@ -675,7 +709,9 @@ const useWebRTCCall = () => {
     // state
     socketId,
     isConnected,
-    deviceName,
+    deviceName: userName,
+    needsName: !userName,
+    saveName,
     status,
     otherDevices,
     inCall,

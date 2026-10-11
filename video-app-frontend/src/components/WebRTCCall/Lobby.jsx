@@ -13,6 +13,7 @@ const Lobby = ({
   unread = {},
   onCall,
   onChat,
+  onEditName,
 }) => {
   const [clock, setClock] = useState(new Date());
 
@@ -75,13 +76,21 @@ const Lobby = ({
                 <div className="text-xs text-[#80868b] font-mono mt-0.5 break-all">{socketId}</div>
               )}
             </div>
+            <button
+              onClick={onEditName}
+              aria-label="Change your name"
+              title="Change name"
+              className="shrink-0 w-9 h-9 rounded-full text-[#5f6368] hover:bg-[#f1f3f4] flex items-center justify-center focus-visible:outline focus-visible:outline-2 focus-visible:outline-[#1a73e8]"
+            >
+              <Icon name="edit" className="w-5 h-5" />
+            </button>
           </div>
         </section>
 
         {/* Right: devices list */}
         <section className="rounded-3xl border border-[#dadce0] shadow-[0_1px_3px_rgba(60,64,67,.15)] overflow-hidden">
           <div className="px-4 sm:px-6 py-4 border-b border-[#dadce0] flex items-center justify-between">
-            <h2 className="text-lg font-medium">Available devices</h2>
+            <h2 className="text-lg font-medium">People online</h2>
             <span className="text-sm text-[#5f6368]">{devices.length} online</span>
           </div>
 
@@ -90,9 +99,9 @@ const Lobby = ({
               <div className="mx-auto mb-4 w-14 h-14 rounded-full bg-[#f1f3f4] flex items-center justify-center">
                 <Icon name="video" className="w-7 h-7 text-[#80868b]" />
               </div>
-              No other devices online.
+              No one else is online.
               <br />
-              Open this URL on another device to see it here.
+              Share this link with someone to start a call.
             </div>
           ) : (
             <ul className="max-h-[55dvh] md:max-h-[420px] overflow-y-auto divide-y divide-[#f1f3f4]">

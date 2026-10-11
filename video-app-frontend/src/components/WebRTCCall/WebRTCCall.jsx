@@ -1,13 +1,15 @@
-import React from "react";
+import React, { useState } from "react";
 import useWebRTCCall from "./useWebRTCCall";
 import Lobby from "./Lobby";
 import CallScreen from "./CallScreen";
 import ChatPanel from "./ChatPanel";
 import IncomingCallModal from "./IncomingCallModal";
 import Toast from "./Toast";
+import NameScreen from "./NameScreen";
 
 const WebRTCCall = () => {
   const call = useWebRTCCall();
+  const [editingName, setEditingName] = useState(false);
 
   const chatTarget = call.chatTarget;
   const chatOnline = chatTarget
@@ -32,6 +34,7 @@ const WebRTCCall = () => {
         unread={call.unread}
         onCall={call.handleCallDevice}
         onChat={call.openChat}
+        onEditName={() => setEditingName(true)}
       />
 
       <CallScreen
@@ -70,6 +73,17 @@ const WebRTCCall = () => {
         onAccept={call.acceptCall}
         onDecline={call.declineCall}
       />
+
+      {(call.needsName || editingName) && (
+        <NameScreen
+          required={call.needsName}
+          initialName={call.deviceName}
+          onSave={(n) => {
+            if (call.saveName(n)) setEditingName(false);
+          }}
+          onCancel={() => setEditingName(false)}
+        />
+      )}
 
       <Toast message={call.toast} />
     </div>

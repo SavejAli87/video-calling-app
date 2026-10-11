@@ -3,6 +3,10 @@
 const BACKEND_URL = "https://video-calling-app-z1ed.onrender.com";
 export const SERVER_URL = import.meta.env.VITE_SIGNALING_URL || BACKEND_URL;
 
+// Visitor ka naam is key me browser (localStorage) me save hota hai
+export const NAME_KEY = "displayName";
+export const MAX_NAME_LENGTH = 30;
+
 export const RTC_CONFIG = {
   iceServers: [
     { urls: "stun:stun.l.google.com:19302" },

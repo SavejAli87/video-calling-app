@@ -52,6 +52,12 @@ function setupSocket(io) {
     socket.on("register-device", (device) => {
       if (!device || typeof device.deviceId !== "string") return;
 
+      // Naam client se aata hai: trim + 30 chars tak, khali ho to "Guest"
+      const name =
+        typeof device.deviceName === "string"
+          ? device.deviceName.replace(/\s+/g, " ").trim().slice(0, 30)
+          : "";
+
       // Same deviceId ke purane sockets hatao (reconnect / zombie sockets).
       // Agar wo kisi call me the, to partner ko free karke batao.
       for (const [oldId, dev] of devices.entries()) {
@@ -65,7 +71,7 @@ function setupSocket(io) {
       devices.set(socket.id, {
         socketId: socket.id,
         deviceId: device.deviceId,
-        deviceName: device.deviceName,
+        deviceName: name || "Guest",
         status: calls.has(socket.id) ? "busy" : "available",
       });
 
