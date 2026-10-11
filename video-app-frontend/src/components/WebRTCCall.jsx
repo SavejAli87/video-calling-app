@@ -4,7 +4,7 @@ import { io } from "socket.io-client";
 // ---------------------------------------------------------------------------
 // Server URL
 // ---------------------------------------------------------------------------
-const BACKEND_URL = "https://video-calling-app-z1ed.onrender.com";
+const BACKEND_URL = "wss://video-calling-app-z1ed.onrender.com";
 const SERVER_URL = import.meta.env.VITE_SIGNALING_URL || BACKEND_URL;
 
 const RTC_CONFIG = {
