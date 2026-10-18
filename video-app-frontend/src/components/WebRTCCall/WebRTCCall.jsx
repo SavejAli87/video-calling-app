@@ -13,7 +13,7 @@ const WebRTCCall = () => {
 
   const chatTarget = call.chatTarget;
   const chatOnline = chatTarget
-    ? call.otherDevices.some((d) => d.socketId === chatTarget.socketId)
+    ? call.friendsView.some((f) => f.publicId === chatTarget.publicId && f.online)
     : false;
 
   return (
@@ -30,10 +30,17 @@ const WebRTCCall = () => {
         status={call.status}
         isConnected={call.isConnected}
         inCall={call.inCall}
-        devices={call.otherDevices}
+        friends={call.friendsView}
+        strangers={call.strangers}
+        requests={call.friendRequests}
         unread={call.unread}
+        serverOutdated={call.serverOutdated}
         onCall={call.handleCallDevice}
         onChat={call.openChat}
+        onAddFriend={call.sendFriendRequest}
+        onCancelRequest={call.cancelFriendRequest}
+        onRespond={call.respondFriendRequest}
+        onRemoveFriend={call.removeFriend}
         onEditName={() => setEditingName(true)}
       />
 
@@ -49,7 +56,7 @@ const WebRTCCall = () => {
         camOn={call.camOn}
         seconds={call.seconds}
         chatOpen={call.inCall && !!chatTarget}
-        chatUnread={call.unread[call.remoteSocketId] || 0}
+        chatUnread={call.unread[call.remotePublicId] || 0}
         onToggleChat={call.toggleCallChat}
         onToggleMic={call.toggleMic}
         onToggleCam={call.toggleCam}
@@ -58,10 +65,10 @@ const WebRTCCall = () => {
 
       <ChatPanel
         target={chatTarget}
-        messages={chatTarget ? call.messages[chatTarget.socketId] : []}
-        typing={chatTarget ? !!call.typing[chatTarget.socketId] : false}
+        messages={chatTarget ? call.messages[chatTarget.publicId] : []}
+        typing={chatTarget ? !!call.typing[chatTarget.publicId] : false}
         online={chatOnline}
-        chatSupported={call.chatSupported}
+        chatSupported={!call.serverOutdated}
         mode={call.inCall ? "call" : "lobby"}
         onSend={call.sendMessage}
         onTyping={call.sendTyping}

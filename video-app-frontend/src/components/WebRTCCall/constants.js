@@ -5,6 +5,9 @@ export const SERVER_URL = import.meta.env.VITE_SIGNALING_URL || BACKEND_URL;
 
 // Visitor ka naam is key me browser (localStorage) me save hota hai
 export const NAME_KEY = "displayName";
+// Permanent device identity + friends list (dono isi browser me save hote hain)
+export const DEVICE_ID_KEY = "deviceId";
+export const FRIENDS_KEY = "friends";
 export const MAX_NAME_LENGTH = 30;
 
 export const RTC_CONFIG = {

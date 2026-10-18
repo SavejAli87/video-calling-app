@@ -1,26 +1,36 @@
 /**
  * chatHandler.js
- * 1-to-1 instant messaging (call ke andar aur lobby dono me kaam karta hai)
+ * 1-to-1 instant messaging - sirf FRIENDS ke beech.
+ * Target publicId se hota hai (socketId reconnect par badal jata hai).
  */
 const crypto = require("crypto");
 
 const MAX_MESSAGE_LENGTH = 1000;
 
-function setupChat(io, socket, devices) {
+function setupChat(io, socket, { devices, socketOfPublic, areFriends }) {
   // 1. Private message bhejna
   socket.on("send-private-message", (data = {}) => {
     try {
-      const { targetSocketId, message, clientId } = data;
+      const { targetPublicId, message, clientId } = data;
       const text = typeof message === "string" ? message.trim().slice(0, MAX_MESSAGE_LENGTH) : "";
       const sender = devices.get(socket.id);
 
-      if (!sender || !targetSocketId || !text) return;
+      if (!sender || typeof targetPublicId !== "string" || !text) return;
 
-      if (!devices.has(targetSocketId)) {
+      if (!areFriends(sender.publicId, targetPublicId)) {
         return socket.emit("message-error", {
-          targetSocketId,
+          targetPublicId,
           clientId,
-          message: "Device is offline. Message was not delivered.",
+          message: "You can only message friends.",
+        });
+      }
+
+      const targetSocketId = socketOfPublic.get(targetPublicId);
+      if (!targetSocketId) {
+        return socket.emit("message-error", {
+          targetPublicId,
+          clientId,
+          message: "Friend is offline. Message was not delivered.",
         });
       }
 
@@ -28,14 +38,14 @@ function setupChat(io, socket, devices) {
 
       io.to(targetSocketId).emit("receive-private-message", {
         id: crypto.randomUUID(),
-        senderSocketId: socket.id,
+        senderPublicId: sender.publicId,
         senderName: sender.deviceName, // server se aata hai, client spoof nahi kar sakta
         message: text,
         timestamp,
       });
 
       socket.emit("message-sent-ack", {
-        targetSocketId,
+        targetPublicId,
         clientId,
         status: "delivered",
         timestamp,
@@ -46,10 +56,12 @@ function setupChat(io, socket, devices) {
   });
 
   // 2. Typing indicator
-  socket.on("typing-indicator", ({ targetSocketId, isTyping } = {}) => {
-    if (targetSocketId && devices.has(targetSocketId)) {
+  socket.on("typing-indicator", ({ targetPublicId, isTyping } = {}) => {
+    const sender = devices.get(socket.id);
+    const targetSocketId = socketOfPublic.get(targetPublicId);
+    if (sender && targetSocketId && areFriends(sender.publicId, targetPublicId)) {
       io.to(targetSocketId).emit("user-typing", {
-        senderSocketId: socket.id,
+        senderPublicId: sender.publicId,
         isTyping: Boolean(isTyping),
       });
     }

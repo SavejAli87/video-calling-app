@@ -48,7 +48,7 @@ const ChatPanel = ({
 
   useEffect(() => {
     inputRef.current?.focus();
-  }, [target?.socketId]);
+  }, [target?.publicId]);
 
   useEffect(() => {
     return () => {
@@ -59,7 +59,7 @@ const ChatPanel = ({
       }
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [target?.socketId]);
+  }, [target?.publicId]);
 
   if (!target) return null;
 
@@ -216,7 +216,7 @@ const ChatPanel = ({
           <span className="rounded-lg bg-[#fff5c4] text-[#54656f] text-xs px-3 py-1.5 text-center shadow-sm">
             {!chatSupported
               ? "Chat is unavailable: the server needs to be updated."
-              : "Device is offline. Messages can't be delivered."}
+              : "Your friend is offline. Messages can't be delivered."}
           </span>
         </div>
       )}

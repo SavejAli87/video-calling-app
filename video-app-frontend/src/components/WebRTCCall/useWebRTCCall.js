@@ -1,11 +1,19 @@
 import { useState, useEffect, useRef, useCallback } from "react";
 import { io } from "socket.io-client";
-import { SERVER_URL, RTC_CONFIG, NAME_KEY, MAX_NAME_LENGTH } from "./constants";
+import {
+  SERVER_URL,
+  RTC_CONFIG,
+  NAME_KEY,
+  MAX_NAME_LENGTH,
+  DEVICE_ID_KEY,
+  FRIENDS_KEY,
+} from "./constants";
 import { normalizeName } from "./utils";
 
 const RING_TIMEOUT_MS = 30000;
 const ACK_TIMEOUT_MS = 6000;
 
+// ----------------------------------------------------------------- storage
 const loadName = () => {
   try {
     return normalizeName(localStorage.getItem(NAME_KEY), MAX_NAME_LENGTH);
@@ -14,16 +22,53 @@ const loadName = () => {
   }
 };
 
+// Permanent device identity: friendship isi device ke saath bandhi hai.
+const getDeviceId = () => {
+  const fresh = () =>
+    "device-" + Date.now() + "-" + Math.random().toString(36).substring(2, 10);
+  try {
+    let id = localStorage.getItem(DEVICE_ID_KEY);
+    if (!id) {
+      id = fresh();
+      localStorage.setItem(DEVICE_ID_KEY, id);
+    }
+    return id;
+  } catch {
+    return fresh(); // storage blocked: is session ke liye temporary id
+  }
+};
+
+// [{ id: publicId, name: lastKnownName }]
+const loadFriends = () => {
+  try {
+    const arr = JSON.parse(localStorage.getItem(FRIENDS_KEY) || "[]");
+    if (!Array.isArray(arr)) return [];
+    return arr
+      .filter((f) => f && typeof f.id === "string")
+      .map((f) => ({ id: f.id, name: String(f.name || "") }));
+  } catch {
+    return [];
+  }
+};
+
+const saveFriends = (list) => {
+  try {
+    localStorage.setItem(FRIENDS_KEY, JSON.stringify(list));
+  } catch {
+    /* storage blocked */
+  }
+};
+
 const makeId = () => `${Date.now()}-${Math.random().toString(36).slice(2, 10)}`;
 
 /**
- * Saara signaling + WebRTC + chat logic yaha hai.
+ * Saara signaling + WebRTC + chat + friends logic yaha hai.
  * UI components sirf iska return value use karte hain.
  */
 const useWebRTCCall = () => {
   const [socketId, setSocketId] = useState("");
   const [isConnected, setIsConnected] = useState(false);
-  const [userName, setUserName] = useState(loadName); // saved name (localStorage)
+  const [userName, setUserName] = useState(loadName);
   const [status, setStatus] = useState("Connecting to signaling server...");
   const [devices, setDevices] = useState([]);
   const [inCall, setInCall] = useState(false);
@@ -32,17 +77,21 @@ const useWebRTCCall = () => {
   const [camOn, setCamOn] = useState(true);
   const [remoteReady, setRemoteReady] = useState(false);
   const [remoteName, setRemoteName] = useState("");
-  const [remoteSocketId, setRemoteSocketId] = useState("");
+  const [remotePublicId, setRemotePublicId] = useState("");
   const [incomingCall, setIncomingCall] = useState(null);
   const [toast, setToast] = useState("");
   const [seconds, setSeconds] = useState(0);
 
-  // Chat state
-  const [chatTarget, setChatTarget] = useState(null); // { socketId, deviceName } | null
-  const [messages, setMessages] = useState({}); // { [socketId]: Message[] }
-  const [unread, setUnread] = useState({}); // { [socketId]: number }
-  const [typing, setTyping] = useState({}); // { [socketId]: boolean }
-  const [chatSupported, setChatSupported] = useState(false); // server "server-info" bhejta hai
+  // Friends
+  const [friends, setFriends] = useState(loadFriends); // [{ id, name }]
+  const [friendRequests, setFriendRequests] = useState({ incoming: [], outgoing: [] });
+  const [serverOutdated, setServerOutdated] = useState(false);
+
+  // Chat (publicId se key: friend ka socketId reconnect par badalta hai, publicId nahi)
+  const [chatTarget, setChatTarget] = useState(null); // { publicId, deviceName } | null
+  const [messages, setMessages] = useState({}); // { [publicId]: Message[] }
+  const [unread, setUnread] = useState({}); // { [publicId]: number }
+  const [typing, setTyping] = useState({}); // { [publicId]: boolean }
 
   const socketRef = useRef(null);
   const peerRef = useRef(null);
@@ -57,9 +106,11 @@ const useWebRTCCall = () => {
   const callAcceptedRef = useRef(false);
   const chatTargetRef = useRef(null);
   const typingTimersRef = useRef({});
-  const chatSupportedRef = useRef(false);
+  const serverReadyRef = useRef(false);
   const userNameRef = useRef(userName);
   const registerRef = useRef(null);
+  const friendsRef = useRef(friends);
+  const replacedRef = useRef(false);
 
   const localVideoRef = useRef(null);
   const remoteVideoRef = useRef(null);
@@ -118,14 +169,13 @@ const useWebRTCCall = () => {
     setMicOn(true);
     setCamOn(true);
     setRemoteName("");
-    setRemoteSocketId("");
+    setRemotePublicId("");
     setStatus("Ready for another call");
 
-    // Server se fresh device list mangao, taaki busy/available status sahi dikhe
     if (socketRef.current?.connected) socketRef.current.emit("get-devices");
   }, []);
 
-  // Server ko bhi batao ki call khatam (sirf local cleanup kaafi nahi hai)
+  // Server ko bhi batao ki call khatam
   const leaveCall = useCallback(() => {
     if (currentTargetRef.current && socketRef.current?.connected) {
       socketRef.current.emit("end-call", {
@@ -291,7 +341,7 @@ const useWebRTCCall = () => {
     try {
       currentTargetRef.current = data.callerSocketId;
       setRemoteName(data.caller?.deviceName || "Unknown device");
-      setRemoteSocketId(data.callerSocketId);
+      setRemotePublicId(data.caller?.publicId || "");
       setInCall(true);
       setStatus("Starting camera...");
 
@@ -320,15 +370,15 @@ const useWebRTCCall = () => {
   }, []);
 
   // ------------------------------------------------------------------ Chat
-  const openChat = useCallback((device) => {
-    if (!device?.socketId) return;
-    const target = { socketId: device.socketId, deviceName: device.deviceName };
-    chatTargetRef.current = target;
-    setChatTarget(target);
+  const openChat = useCallback((target) => {
+    if (!target?.publicId) return;
+    const t = { publicId: target.publicId, deviceName: target.deviceName };
+    chatTargetRef.current = t;
+    setChatTarget(t);
     setUnread((prev) => {
-      if (!prev[device.socketId]) return prev;
+      if (!prev[t.publicId]) return prev;
       const next = { ...prev };
-      delete next[device.socketId];
+      delete next[t.publicId];
       return next;
     });
   }, []);
@@ -338,34 +388,34 @@ const useWebRTCCall = () => {
     setChatTarget(null);
   }, []);
 
-  // Call ke andar chat button: peer ke saath chat open/close
+  // Call ke andar chat button: samne wale friend ke saath chat open/close
   const toggleCallChat = useCallback(() => {
-    if (!remoteSocketId) return;
-    if (chatTarget?.socketId === remoteSocketId) {
+    if (!remotePublicId) return;
+    if (chatTarget?.publicId === remotePublicId) {
       closeChat();
     } else {
-      openChat({ socketId: remoteSocketId, deviceName: remoteName });
+      openChat({ publicId: remotePublicId, deviceName: remoteName });
     }
-  }, [remoteSocketId, remoteName, chatTarget, openChat, closeChat]);
+  }, [remotePublicId, remoteName, chatTarget, openChat, closeChat]);
 
-  const updateMessageStatus = useCallback((targetSocketId, clientId, status) => {
+  const updateMessageStatus = useCallback((targetPublicId, clientId, status) => {
     setMessages((prev) => {
-      const list = prev[targetSocketId];
+      const list = prev[targetPublicId];
       if (!list) return prev;
       return {
         ...prev,
-        [targetSocketId]: list.map((m) => (m.id === clientId ? { ...m, status } : m)),
+        [targetPublicId]: list.map((m) => (m.id === clientId ? { ...m, status } : m)),
       };
     });
   }, []);
 
-  const failIfPending = useCallback((targetSocketId, clientId) => {
+  const failIfPending = useCallback((targetPublicId, clientId) => {
     setMessages((prev) => {
-      const list = prev[targetSocketId];
+      const list = prev[targetPublicId];
       if (!list) return prev;
       return {
         ...prev,
-        [targetSocketId]: list.map((m) =>
+        [targetPublicId]: list.map((m) =>
           m.id === clientId && m.status === "sending" ? { ...m, status: "failed" } : m
         ),
       };
@@ -384,7 +434,7 @@ const useWebRTCCall = () => {
         return;
       }
 
-      if (!chatSupportedRef.current) {
+      if (!serverReadyRef.current) {
         showToast("Chat isn't available: the backend server needs to be updated and redeployed.");
         return;
       }
@@ -392,20 +442,19 @@ const useWebRTCCall = () => {
       const clientId = makeId();
       setMessages((prev) => ({
         ...prev,
-        [target.socketId]: [
-          ...(prev[target.socketId] || []),
+        [target.publicId]: [
+          ...(prev[target.publicId] || []),
           { id: clientId, sender: "me", text: clean, timestamp: Date.now(), status: "sending" },
         ],
       }));
 
       socket.emit("send-private-message", {
-        targetSocketId: target.socketId,
+        targetPublicId: target.publicId,
         message: clean,
         clientId,
       });
 
-      // Ack na aaye to "Not delivered" dikhao (silently atka na rahe)
-      setTimeout(() => failIfPending(target.socketId, clientId), ACK_TIMEOUT_MS);
+      setTimeout(() => failIfPending(target.publicId, clientId), ACK_TIMEOUT_MS);
     },
     [showToast, failIfPending]
   );
@@ -414,20 +463,64 @@ const useWebRTCCall = () => {
     const target = chatTargetRef.current;
     if (!target || !socketRef.current?.connected) return;
     socketRef.current.emit("typing-indicator", {
-      targetSocketId: target.socketId,
+      targetPublicId: target.publicId,
       isTyping,
     });
   }, []);
 
+  // --------------------------------------------------------------- Friends
+  // friendsRef hamesha latest list rakhta hai (socket handlers me stale closure nahi)
+  const commitFriends = useCallback((next) => {
+    friendsRef.current = next;
+    saveFriends(next);
+    setFriends(next);
+  }, []);
+
+  const requireConnection = useCallback(() => {
+    if (!socketRef.current?.connected) {
+      showToast("Server connection lost. Wait until it reconnects.");
+      return false;
+    }
+    return true;
+  }, [showToast]);
+
+  const sendFriendRequest = useCallback(
+    (device) => {
+      if (!device?.publicId || !requireConnection()) return;
+      socketRef.current.emit("friend-request", { targetPublicId: device.publicId });
+    },
+    [requireConnection]
+  );
+
+  const cancelFriendRequest = useCallback(
+    (publicId) => {
+      if (!requireConnection()) return;
+      socketRef.current.emit("friend-request-cancel", { targetPublicId: publicId });
+    },
+    [requireConnection]
+  );
+
+  const respondFriendRequest = useCallback(
+    (publicId, accept) => {
+      if (!requireConnection()) return;
+      socketRef.current.emit("friend-request-respond", { fromPublicId: publicId, accept });
+    },
+    [requireConnection]
+  );
+
+  const removeFriend = useCallback(
+    (publicId) => {
+      commitFriends(friendsRef.current.filter((f) => f.id !== publicId));
+      if (chatTargetRef.current?.publicId === publicId) closeChat();
+      socketRef.current?.emit("remove-friend", { friendPublicId: publicId });
+    },
+    [commitFriends, closeChat]
+  );
+
   // ------------------------------------------------------ Socket lifecycle
   useEffect(() => {
-    // sessionStorage: har browser tab apna alag device hai (same browser ke 2 tab
-    // ab ek-doosre ko evict nahi karte), aur refresh par naam wahi rehta hai.
-    let devId = sessionStorage.getItem("deviceId");
-    if (!devId) {
-      devId = "device-" + Date.now() + "-" + Math.random().toString(36).substring(2, 10);
-      sessionStorage.setItem("deviceId", devId);
-    }
+    const devId = getDeviceId();
+
     const socket = io(SERVER_URL, {
       transports: ["websocket", "polling"],
       reconnectionAttempts: 10,
@@ -436,26 +529,38 @@ const useWebRTCCall = () => {
 
     socketRef.current = socket;
     const typingTimers = typingTimersRef.current;
+    let serverCheckTimer = null;
 
-    // Naam set hone ke baad hi server par register hote hain (naam badalne par dobara bhi yahi chalta hai)
+    // Naam set hone ke baad hi register hote hain. Saved friends list bhi saath jaati hai.
     registerRef.current = () => {
       const name = userNameRef.current;
       if (!name || !socket.connected) return;
-      socket.emit("register-device", { deviceId: devId, deviceName: name });
+      socket.emit("register-device", {
+        deviceId: devId,
+        deviceName: name,
+        friends: friendsRef.current.map((f) => f.id),
+      });
     };
 
     socket.on("server-info", (info) => {
-      const supported = Boolean(info?.chat);
-      chatSupportedRef.current = supported;
-      setChatSupported(supported);
+      const ok = Boolean(info?.chat && info?.friends);
+      serverReadyRef.current = ok;
+      setServerOutdated(!ok);
+      clearTimeout(serverCheckTimer);
     });
 
     socket.on("connect", () => {
-      chatSupportedRef.current = false;
-      setChatSupported(false);
+      replacedRef.current = false;
+      serverReadyRef.current = false;
+      setServerOutdated(false);
 
-      // Reconnect hone par server purani call khatam kar chuka hota hai,
-      // lekin hume "call-ended" mila nahi (hum offline the) -> local state saaf karo.
+      // Server ne 3 sec me server-info nahi bheja -> purana backend
+      clearTimeout(serverCheckTimer);
+      serverCheckTimer = setTimeout(() => {
+        if (!serverReadyRef.current) setServerOutdated(true);
+      }, 3000);
+
+      // Reconnect hone par server purani call khatam kar chuka hota hai
       if (currentTargetRef.current || incomingRef.current) {
         incomingRef.current = null;
         setIncomingCall(null);
@@ -472,9 +577,13 @@ const useWebRTCCall = () => {
     });
 
     socket.on("disconnect", (reason) => {
-      chatSupportedRef.current = false;
+      serverReadyRef.current = false;
       setIsConnected(false);
-      setStatus(`Disconnected from server (${reason})`);
+      setStatus(
+        replacedRef.current
+          ? "Opened in another tab. Reload this page to use it here."
+          : `Disconnected from server (${reason})`
+      );
     });
 
     socket.on("connect_error", (err) => {
@@ -483,8 +592,67 @@ const useWebRTCCall = () => {
       console.error("Socket error details:", err.message);
     });
 
+    socket.on("replaced", () => {
+      // Same device doosre tab me khul gaya
+      replacedRef.current = true;
+      showToast("This device was opened in another tab.");
+    });
+
     socket.on("device-list", (deviceList) => {
       setDevices(deviceList);
+
+      // Friends ke naam badle hon to saved list update karo
+      const current = friendsRef.current;
+      const changed = current.some((f) => {
+        const d = deviceList.find((x) => x.publicId === f.id);
+        return d && d.deviceName !== f.name;
+      });
+      if (changed) {
+        commitFriends(
+          current.map((f) => {
+            const d = deviceList.find((x) => x.publicId === f.id);
+            return d ? { ...f, name: d.deviceName } : f;
+          })
+        );
+      }
+    });
+
+    // ----------------------------------------------------- Friend events
+    socket.on("friend-requests", (snapshot) => {
+      setFriendRequests({
+        incoming: snapshot?.incoming || [],
+        outgoing: snapshot?.outgoing || [],
+      });
+    });
+
+    socket.on("friend-request-received", ({ name }) => {
+      showToast(`${name || "Someone"} sent you a friend request`);
+    });
+
+    socket.on("friend-added", ({ publicId, name }) => {
+      const list = friendsRef.current;
+      const exists = list.some((f) => f.id === publicId);
+      commitFriends(
+        exists
+          ? list.map((f) => (f.id === publicId ? { ...f, name: name || f.name } : f))
+          : [...list, { id: publicId, name: name || "" }]
+      );
+      showToast(`You and ${name || "your friend"} are now friends`);
+    });
+
+    socket.on("friend-removed", ({ publicId }) => {
+      const existing = friendsRef.current.find((f) => f.id === publicId);
+      if (!existing) return;
+      commitFriends(friendsRef.current.filter((f) => f.id !== publicId));
+      if (chatTargetRef.current?.publicId === publicId) {
+        chatTargetRef.current = null;
+        setChatTarget(null);
+      }
+      showToast(`${existing.name || "A friend"} is no longer in your friends list`);
+    });
+
+    socket.on("friend-error", ({ message }) => {
+      showToast(message || "Something went wrong.");
     });
 
     // Incoming call receiver
@@ -520,7 +688,7 @@ const useWebRTCCall = () => {
         setStatus("Connecting...");
       } catch (err) {
         console.error("Call offer creation error:", err);
-        leaveCall(); // partner ko bhi batao, warna wo call me atka rehta hai
+        leaveCall();
       }
     });
 
@@ -590,7 +758,6 @@ const useWebRTCCall = () => {
     });
 
     socket.on("call-ended", () => {
-      // caller ring ke beech cut kare to incoming popup bhi band ho
       incomingRef.current = null;
       setIncomingCall(null);
       cleanupCall();
@@ -599,7 +766,7 @@ const useWebRTCCall = () => {
 
     // ------------------------------------------------------------- Chat events
     socket.on("receive-private-message", (m) => {
-      const from = m.senderSocketId;
+      const from = m.senderPublicId;
 
       setMessages((prev) => ({
         ...prev,
@@ -610,34 +777,33 @@ const useWebRTCCall = () => {
       }));
       setTyping((prev) => ({ ...prev, [from]: false }));
 
-      // Is device ka chat abhi khula nahi hai -> unread badge + toast
-      if (chatTargetRef.current?.socketId !== from) {
+      if (chatTargetRef.current?.publicId !== from) {
         setUnread((prev) => ({ ...prev, [from]: (prev[from] || 0) + 1 }));
-        showToast(`New message from ${m.senderName || "a device"}`);
+        showToast(`New message from ${m.senderName || "a friend"}`);
       }
     });
 
-    socket.on("user-typing", ({ senderSocketId, isTyping }) => {
-      clearTimeout(typingTimers[senderSocketId]);
-      setTyping((prev) => ({ ...prev, [senderSocketId]: Boolean(isTyping) }));
+    socket.on("user-typing", ({ senderPublicId, isTyping }) => {
+      clearTimeout(typingTimers[senderPublicId]);
+      setTyping((prev) => ({ ...prev, [senderPublicId]: Boolean(isTyping) }));
       if (isTyping) {
-        // agar "stopped typing" event miss ho jaye to indicator khud hat jaye
-        typingTimers[senderSocketId] = setTimeout(() => {
-          setTyping((prev) => ({ ...prev, [senderSocketId]: false }));
+        typingTimers[senderPublicId] = setTimeout(() => {
+          setTyping((prev) => ({ ...prev, [senderPublicId]: false }));
         }, 4000);
       }
     });
 
-    socket.on("message-sent-ack", ({ targetSocketId, clientId }) => {
-      updateMessageStatus(targetSocketId, clientId, "delivered");
+    socket.on("message-sent-ack", ({ targetPublicId, clientId }) => {
+      updateMessageStatus(targetPublicId, clientId, "delivered");
     });
 
-    socket.on("message-error", ({ targetSocketId, clientId, message }) => {
-      updateMessageStatus(targetSocketId, clientId, "failed");
+    socket.on("message-error", ({ targetPublicId, clientId, message }) => {
+      updateMessageStatus(targetPublicId, clientId, "failed");
       showToast(message || "Message was not delivered.");
     });
 
     return () => {
+      clearTimeout(serverCheckTimer);
       registerRef.current = null;
       Object.values(typingTimers).forEach(clearTimeout);
       cleanupCall();
@@ -651,6 +817,7 @@ const useWebRTCCall = () => {
     leaveCall,
     flushPendingIceCandidates,
     updateMessageStatus,
+    commitFriends,
     showToast,
   ]);
 
@@ -673,6 +840,7 @@ const useWebRTCCall = () => {
   }, []);
 
   // ------------------------------------------------- Call / end call actions
+  // device: { socketId, publicId, deviceName } - sirf friends ko call hoti hai (server bhi check karta hai)
   const handleCallDevice = useCallback(
     (device) => {
       if (!socketRef.current || !socketRef.current.connected) {
@@ -680,16 +848,19 @@ const useWebRTCCall = () => {
         return;
       }
       if (inCall || incomingRef.current) return;
+      if (!device?.socketId) {
+        showToast("Your friend is offline right now.");
+        return;
+      }
 
       callAcceptedRef.current = false;
       currentTargetRef.current = device.socketId;
       setRemoteName(device.deviceName);
-      setRemoteSocketId(device.socketId);
+      setRemotePublicId(device.publicId || "");
       setInCall(true);
       setStatus(`Calling ${device.deviceName}...`);
       socketRef.current.emit("call-device", { targetSocketId: device.socketId });
 
-      // Koi jawab na de to ring cancel (callee ka popup bhi band ho jata hai)
       clearTimeout(ringTimerRef.current);
       ringTimerRef.current = setTimeout(() => {
         if (!callAcceptedRef.current && currentTargetRef.current === device.socketId) {
@@ -703,7 +874,27 @@ const useWebRTCCall = () => {
 
   const handleEndCall = leaveCall;
 
+  // ---------------------------------------------------------- Derived lists
   const otherDevices = devices.filter((d) => d.socketId !== socketId);
+  const onlineByPublic = new Map(otherDevices.map((d) => [d.publicId, d]));
+  const friendIds = new Set(friends.map((f) => f.id));
+
+  // Friends: online pehle, phir naam ke hisaab se
+  const friendsView = friends
+    .map((f) => {
+      const d = onlineByPublic.get(f.id);
+      return {
+        publicId: f.id,
+        name: d?.deviceName || f.name || "Friend",
+        online: Boolean(d),
+        socketId: d?.socketId || "",
+        status: d ? d.status : "offline",
+      };
+    })
+    .sort((a, b) => Number(b.online) - Number(a.online) || a.name.localeCompare(b.name));
+
+  // Online log jo abhi friend nahi hain
+  const strangers = otherDevices.filter((d) => !friendIds.has(d.publicId));
 
   return {
     // state
@@ -719,16 +910,24 @@ const useWebRTCCall = () => {
     camOn,
     remoteReady,
     remoteName,
-    remoteSocketId,
+    remotePublicId,
     incomingCall,
     toast,
     seconds,
+    serverOutdated,
+    // friends
+    friendsView,
+    strangers,
+    friendRequests,
+    sendFriendRequest,
+    cancelFriendRequest,
+    respondFriendRequest,
+    removeFriend,
     // chat state
     chatTarget,
     messages,
     unread,
     typing,
-    chatSupported,
     // refs
     localVideoRef,
     remoteVideoRef,
