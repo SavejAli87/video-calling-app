@@ -11,10 +11,11 @@ const WA = {
   inc: "#ffffff",
   time: "#667781",
   send: "#00a884",
-  seenPink: "#ec4899",
   quoteMe: "#00a884",
   quoteThem: "#8b5cf6",
 };
+
+const LONG_PRESS_MS = 500;
 
 const Ticks = ({ status }) => {
   if (status === "failed") return <Icon name="alert" className="w-3.5 h-3.5 text-[#d93025]" />;
@@ -23,31 +24,23 @@ const Ticks = ({ status }) => {
   return <Icon name="ticks" className="w-4 h-4" />; // delivered (grey)
 };
 
-// Reply preview / quote ke liye chhota text
-const quoteLabel = (kind, text) =>
-  kind === "image" ? `📷 ${text || "Photo"}` : text;
+const quoteLabel = (kind, text) => (kind === "image" ? `📷 ${text || "Photo"}` : text);
 
-/** Reply bar (input ke upar) - tap karke bheje message ka quote */
-const ReplyBar = ({ reply, name, onCancel }) => (
+/** Input ke upar wali bar: reply ya edit ka preview */
+const ContextBar = ({ color, title, body, onCancel, cancelLabel }) => (
   <div className="mx-2 mb-1 flex items-stretch gap-2 rounded-lg bg-white shadow-sm overflow-hidden">
-    <span
-      className="w-1 shrink-0"
-      style={{ background: reply.from === "me" ? WA.quoteMe : WA.quoteThem }}
-    />
+    <span className="w-1 shrink-0" style={{ background: color }} />
     <div className="min-w-0 flex-1 py-1.5">
-      <div
-        className="text-xs font-medium"
-        style={{ color: reply.from === "me" ? WA.quoteMe : WA.quoteThem }}
-      >
-        {reply.from === "me" ? "You" : name}
+      <div className="text-xs font-medium" style={{ color }}>
+        {title}
       </div>
-      <div className="text-sm text-[#54656f] truncate">{quoteLabel(reply.kind, reply.text)}</div>
+      <div className="text-sm text-[#54656f] truncate">{body}</div>
     </div>
     <button
       type="button"
       onClick={onCancel}
-      aria-label="Cancel reply"
-      title="Cancel reply"
+      aria-label={cancelLabel}
+      title={cancelLabel}
       className="w-10 shrink-0 flex items-center justify-center text-[#54656f] hover:bg-black/5"
     >
       <Icon name="close" className="w-5 h-5" />
@@ -55,11 +48,47 @@ const ReplyBar = ({ reply, name, onCancel }) => (
   </div>
 );
 
+const SheetRow = ({ icon, label, hint, onClick, danger, disabled }) => (
+  <button
+    type="button"
+    onClick={onClick}
+    disabled={disabled}
+    className={`w-full flex items-center gap-4 px-5 py-3.5 text-left text-[15px] hover:bg-black/5 disabled:opacity-40 disabled:hover:bg-transparent ${
+      danger ? "text-[#d93025]" : "text-[#111b21]"
+    }`}
+  >
+    {icon && <Icon name={icon} className="w-5 h-5 shrink-0" />}
+    <span className="flex-1">{label}</span>
+    {hint && <span className="text-xs text-[#667781]">{hint}</span>}
+  </button>
+);
+
+const copyToClipboard = async (value) => {
+  try {
+    await navigator.clipboard.writeText(value);
+  } catch {
+    const ta = document.createElement("textarea");
+    ta.value = value;
+    ta.style.position = "fixed";
+    ta.style.opacity = "0";
+    document.body.appendChild(ta);
+    ta.select();
+    try {
+      document.execCommand("copy");
+    } catch {
+      /* clipboard unavailable */
+    }
+    document.body.removeChild(ta);
+  }
+};
+
 /**
  * WhatsApp-style chat panel.
- *  - message par tap  -> us message ka reply
- *  - photo par tap    -> bada karke dekho (wahan bhi Reply button hai)
- *  - ticks: bheja = clock, deliver = grey double tick, seen = PINK double tick
+ *  - message par tap            -> reply
+ *  - hold / right-click / ⌄     -> menu: Reply, Copy, Edit, Delete
+ *  - photo par tap              -> bada viewer
+ *  - ticks: clock -> grey double tick (delivered) -> PINK double tick (seen)
+ *  - 24 ghante baad messages khud delete ho jaate hain (hook karta hai)
  * mode="call"  -> call ke dauran: mobile par bottom bar chhod kar full, desktop par right side
  * mode="lobby" -> lobby: mobile par full screen, desktop par bottom-right floating card
  *
@@ -73,12 +102,17 @@ const ChatPanel = ({
   chatSupported = true,
   mode = "lobby",
   onSend, // ({ text, image?, replyTo? })
+  onEdit, // (id, text)
+  onDeleteForMe, // (id)
+  onDeleteForEveryone, // (id)
   onTyping,
   onClose,
 }) => {
   const [text, setText] = useState("");
   const [replyTo, setReplyTo] = useState(null); // { id, from, text, kind }
-  const [pending, setPending] = useState(null); // { dataUrl } - bhejne se pehle preview
+  const [editing, setEditing] = useState(null); // { id }
+  const [menu, setMenu] = useState(null); // { msg, step: "main" | "delete" }
+  const [pending, setPending] = useState(null); // { dataUrl }
   const [caption, setCaption] = useState("");
   const [processing, setProcessing] = useState(false);
   const [fileError, setFileError] = useState("");
@@ -91,6 +125,8 @@ const ChatPanel = ({
   const typingTimerRef = useRef(null);
   const typingSentRef = useRef(false);
   const highlightTimerRef = useRef(null);
+  const pressTimerRef = useRef(null);
+  const pressFiredRef = useRef(false);
 
   useEffect(() => {
     endRef.current?.scrollIntoView({ behavior: "smooth" });
@@ -104,6 +140,7 @@ const ChatPanel = ({
     return () => {
       clearTimeout(typingTimerRef.current);
       clearTimeout(highlightTimerRef.current);
+      clearTimeout(pressTimerRef.current);
       if (typingSentRef.current) {
         typingSentRef.current = false;
         onTyping?.(false);
@@ -112,17 +149,23 @@ const ChatPanel = ({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [target?.publicId]);
 
-  // Esc: pehle photo viewer band ho
+  // Esc: pehle photo viewer / menu band ho
   useEffect(() => {
-    if (!lightbox) return;
-    const onKey = (e) => e.key === "Escape" && setLightbox(null);
+    if (!lightbox && !menu) return;
+    const onKey = (e) => {
+      if (e.key !== "Escape") return;
+      if (lightbox) setLightbox(null);
+      else setMenu(null);
+    };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [lightbox]);
+  }, [lightbox, menu]);
 
   if (!target) return null;
 
   const canChat = online && chatSupported;
+  const byId = new Map(messages.map((m) => [m.id, m]));
+  const editingMsg = editing ? byId.get(editing.id) : null;
 
   const stopTyping = () => {
     clearTimeout(typingTimerRef.current);
@@ -145,10 +188,33 @@ const ChatPanel = ({
     if (!val) stopTyping();
   };
 
+  // ------------------------------------------------------------- edit
+  const cancelEdit = () => {
+    setEditing(null);
+    setText("");
+    stopTyping();
+  };
+
+  const startEdit = (m) => {
+    setReplyTo(null);
+    setEditing({ id: m.id });
+    setText(m.text);
+    setMenu(null);
+    inputRef.current?.focus();
+  };
+
   const handleSubmit = (e) => {
     e.preventDefault();
     const clean = text.trim();
     if (!clean || !canChat) return;
+
+    if (editing) {
+      const original = byId.get(editing.id);
+      if (original && !original.deleted && clean !== original.text) onEdit?.(editing.id, clean);
+      cancelEdit();
+      return;
+    }
+
     onSend({ text: clean, replyTo });
     setText("");
     setReplyTo(null);
@@ -158,6 +224,8 @@ const ChatPanel = ({
 
   // ------------------------------------------------------------- reply
   const startReply = (m) => {
+    if (m.deleted) return;
+    if (editing) cancelEdit();
     setReplyTo({
       id: m.id,
       from: m.sender, // "me" | "them"
@@ -165,6 +233,7 @@ const ChatPanel = ({
       kind: m.image ? "image" : "text",
     });
     setLightbox(null);
+    setMenu(null);
     inputRef.current?.focus();
   };
 
@@ -176,6 +245,24 @@ const ChatPanel = ({
     clearTimeout(highlightTimerRef.current);
     highlightTimerRef.current = setTimeout(() => setHighlightId(null), 1200);
   };
+
+  // ------------------------------------------------------------- menu
+  const openMenu = (m) => setMenu({ msg: m, step: "main" });
+
+  const startPress = (m) => {
+    pressFiredRef.current = false;
+    clearTimeout(pressTimerRef.current);
+    pressTimerRef.current = setTimeout(() => {
+      pressFiredRef.current = true;
+      openMenu(m);
+      try {
+        navigator.vibrate?.(15);
+      } catch {
+        /* not supported */
+      }
+    }, LONG_PRESS_MS);
+  };
+  const cancelPress = () => clearTimeout(pressTimerRef.current);
 
   // ------------------------------------------------------------- photos
   const onPickFile = async (e) => {
@@ -211,6 +298,13 @@ const ChatPanel = ({
       : "inset-0 sm:inset-x-auto sm:right-6 sm:bottom-6 sm:top-auto sm:w-[380px] sm:h-[560px] sm:rounded-2xl";
 
   const subline = !chatSupported ? "unavailable" : !online ? "offline" : typing ? "typing…" : "online";
+
+  // ----- menu options for the selected message
+  const sel = menu?.msg;
+  const selMine = sel?.sender === "me";
+  const selDelivered = sel?.status === "delivered" || sel?.status === "seen";
+  const canEditSel = Boolean(selMine && !sel?.deleted && sel?.text && selDelivered);
+  const canDeleteEveryoneSel = Boolean(selMine && !sel?.deleted && selDelivered);
 
   return (
     <div
@@ -249,6 +343,14 @@ const ChatPanel = ({
           backgroundSize: "18px 18px",
         }}
       >
+        <div className="flex justify-center mb-2">
+          <span className="rounded-lg bg-[#fff5c4] text-[#54656f] text-xs px-3 py-1.5 shadow-sm text-center leading-relaxed">
+            🕐 Messages are deleted automatically 24 hours after they&apos;re sent.
+            <br />
+            Tap a message to reply. Hold it (or right-click) for more options.
+          </span>
+        </div>
+
         {messages.length === 0 && (
           <div className="flex justify-center mt-2">
             <span className="rounded-lg bg-[#fff5c4] text-[#54656f] text-xs px-3 py-1.5 shadow-sm text-center">
@@ -265,10 +367,18 @@ const ChatPanel = ({
           const isLast = i === messages.length - 1;
           const timeAndTicks = (
             <>
+              {m.edited && !m.deleted && <span className="mr-0.5">Edited</span>}
               {formatClock(m.timestamp)}
-              {mine && <Ticks status={m.status} />}
+              {mine && !m.deleted && <Ticks status={m.status} />}
             </>
           );
+
+          // reply quote: original abhi bhi hai to uska latest text / deleted status dikhao
+          const orig = m.replyTo ? byId.get(m.replyTo.id) : null;
+          const quoteGone = Boolean(orig?.deleted);
+          const quoteText = quoteGone
+            ? "🚫 Message deleted"
+            : quoteLabel(m.replyTo?.kind, orig && orig.text ? orig.text : m.replyTo?.text);
 
           return (
             <React.Fragment key={m.id}>
@@ -286,11 +396,22 @@ const ChatPanel = ({
               >
                 <div
                   onClick={() => {
+                    if (pressFiredRef.current) {
+                      pressFiredRef.current = false; // long-press ke baad ka click ignore
+                      return;
+                    }
                     if (window.getSelection()?.toString()) return; // text select kar raha hai
                     startReply(m);
                   }}
-                  title="Tap to reply"
-                  className={`relative max-w-[82%] cursor-pointer rounded-lg px-2.5 py-1.5 shadow-[0_1px_0.5px_rgba(11,20,26,.13)] text-[#111b21] transition-shadow ${
+                  onContextMenu={(e) => {
+                    e.preventDefault();
+                    openMenu(m);
+                  }}
+                  onTouchStart={() => startPress(m)}
+                  onTouchEnd={cancelPress}
+                  onTouchMove={cancelPress}
+                  onTouchCancel={cancelPress}
+                  className={`group relative max-w-[82%] ${m.deleted ? "cursor-default" : "cursor-pointer"} rounded-lg px-2.5 py-1.5 shadow-[0_1px_0.5px_rgba(11,20,26,.13)] text-[#111b21] transition-shadow ${
                     groupStart ? (mine ? "rounded-tr-none" : "rounded-tl-none") : ""
                   } ${highlightId === m.id ? "ring-2 ring-[#ec4899]/70" : ""}`}
                   style={{ background: mine ? WA.out : WA.inc }}
@@ -309,67 +430,94 @@ const ChatPanel = ({
                     />
                   )}
 
-                  {/* Quoted (reply) message */}
-                  {m.replyTo && (
-                    <button
-                      type="button"
-                      onClick={(e) => {
-                        e.stopPropagation();
-                        jumpTo(m.replyTo.id);
-                      }}
-                      className="block w-full text-left rounded-md bg-black/[.06] border-l-4 px-2 py-1 mb-1"
-                      style={{ borderColor: m.replyTo.from === "me" ? WA.quoteMe : WA.quoteThem }}
-                    >
-                      <div
-                        className="text-xs font-medium"
-                        style={{ color: m.replyTo.from === "me" ? WA.quoteMe : WA.quoteThem }}
-                      >
-                        {m.replyTo.from === "me" ? "You" : target.deviceName}
-                      </div>
-                      <div className="text-xs text-[#54656f] line-clamp-2 break-words">
-                        {quoteLabel(m.replyTo.kind, m.replyTo.text)}
-                      </div>
-                    </button>
-                  )}
+                  {/* Desktop: hover par menu arrow */}
+                  <button
+                    type="button"
+                    aria-label="Message options"
+                    title="Options"
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      openMenu(m);
+                    }}
+                    className="hidden sm:flex absolute top-0.5 right-0.5 z-[1] w-6 h-6 items-center justify-center rounded-full text-[#667781] bg-black/10 opacity-0 group-hover:opacity-100 focus-visible:opacity-100 transition-opacity"
+                  >
+                    <Icon name="chevron" className="w-5 h-5" />
+                  </button>
 
-                  {/* Photo */}
-                  {m.image && (
-                    <div className="relative -mx-1 mb-1 overflow-hidden rounded-md">
-                      <img
-                        src={m.image}
-                        alt="Shared photo"
-                        onClick={(e) => {
-                          e.stopPropagation();
-                          setLightbox({ src: m.image, msg: m });
-                        }}
-                        onLoad={() => isLast && endRef.current?.scrollIntoView()}
-                        className="block w-[240px] max-w-full max-h-[320px] object-cover cursor-zoom-in"
-                      />
-                      {!m.text && (
-                        <span className="absolute bottom-1 right-1 flex items-center gap-1 rounded bg-black/45 px-1.5 py-0.5 text-[11px] leading-none text-white select-none">
-                          {timeAndTicks}
-                        </span>
+                  {m.deleted ? (
+                    <div className="flex items-end justify-between gap-4 italic text-[14px] text-[#667781]">
+                      <span>
+                        🚫 {mine ? "You deleted this message" : "This message was deleted"}
+                      </span>
+                      <span className="text-[11px] not-italic leading-none translate-y-0.5 select-none">
+                        {formatClock(m.timestamp)}
+                      </span>
+                    </div>
+                  ) : (
+                    <>
+                      {/* Quoted (reply) message */}
+                      {m.replyTo && (
+                        <button
+                          type="button"
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            jumpTo(m.replyTo.id);
+                          }}
+                          className="block w-full text-left rounded-md bg-black/[.06] border-l-4 px-2 py-1 mb-1"
+                          style={{ borderColor: m.replyTo.from === "me" ? WA.quoteMe : WA.quoteThem }}
+                        >
+                          <div
+                            className="text-xs font-medium"
+                            style={{ color: m.replyTo.from === "me" ? WA.quoteMe : WA.quoteThem }}
+                          >
+                            {m.replyTo.from === "me" ? "You" : target.deviceName}
+                          </div>
+                          <div className="text-xs text-[#54656f] line-clamp-2 break-words">
+                            {quoteText}
+                          </div>
+                        </button>
                       )}
-                    </div>
-                  )}
 
-                  {/* Text + time */}
-                  {m.text && (
-                    <div className="flex flex-wrap items-end justify-end gap-x-3">
-                      <span className="min-w-0 text-[14.5px] leading-[1.35] whitespace-pre-wrap break-words">
-                        {m.text}
-                      </span>
-                      <span
-                        className="ml-auto flex items-center gap-1 text-[11px] leading-none translate-y-0.5 select-none"
-                        style={{ color: WA.time }}
-                      >
-                        {timeAndTicks}
-                      </span>
-                    </div>
-                  )}
+                      {/* Photo */}
+                      {m.image && (
+                        <div className="relative -mx-1 mb-1 overflow-hidden rounded-md">
+                          <img
+                            src={m.image}
+                            alt="Shared photo"
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              setLightbox({ src: m.image, msg: m });
+                            }}
+                            onLoad={() => isLast && endRef.current?.scrollIntoView()}
+                            className="block w-[240px] max-w-full max-h-[320px] object-cover cursor-zoom-in"
+                          />
+                          {!m.text && (
+                            <span className="absolute bottom-1 right-1 flex items-center gap-1 rounded bg-black/45 px-1.5 py-0.5 text-[11px] leading-none text-white select-none">
+                              {timeAndTicks}
+                            </span>
+                          )}
+                        </div>
+                      )}
 
-                  {m.status === "failed" && (
-                    <div className="text-[11px] text-[#d93025] text-right mt-0.5">Not delivered</div>
+                      {/* Text + time */}
+                      {m.text && (
+                        <div className="flex flex-wrap items-end justify-end gap-x-3">
+                          <span className="min-w-0 text-[14.5px] leading-[1.35] whitespace-pre-wrap break-words">
+                            {m.text}
+                          </span>
+                          <span
+                            className="ml-auto flex items-center gap-1 text-[11px] leading-none translate-y-0.5 select-none"
+                            style={{ color: WA.time }}
+                          >
+                            {timeAndTicks}
+                          </span>
+                        </div>
+                      )}
+
+                      {m.status === "failed" && (
+                        <div className="text-[11px] text-[#d93025] text-right mt-0.5">Not delivered</div>
+                      )}
+                    </>
                   )}
                 </div>
               </div>
@@ -399,9 +547,24 @@ const ChatPanel = ({
         </div>
       )}
 
-      {/* Reply preview */}
-      {replyTo && !pending && (
-        <ReplyBar reply={replyTo} name={target.deviceName} onCancel={() => setReplyTo(null)} />
+      {/* Edit / reply preview */}
+      {editing && editingMsg && !editingMsg.deleted && (
+        <ContextBar
+          color={WA.send}
+          title="Edit message"
+          body={editingMsg.text}
+          onCancel={cancelEdit}
+          cancelLabel="Cancel edit"
+        />
+      )}
+      {replyTo && !pending && !editing && (
+        <ContextBar
+          color={replyTo.from === "me" ? WA.quoteMe : WA.quoteThem}
+          title={replyTo.from === "me" ? "You" : target.deviceName}
+          body={quoteLabel(replyTo.kind, replyTo.text)}
+          onCancel={() => setReplyTo(null)}
+          cancelLabel="Cancel reply"
+        />
       )}
 
       {/* Input */}
@@ -416,10 +579,15 @@ const ChatPanel = ({
             type="text"
             value={text}
             onChange={handleChange}
-            onKeyDown={(e) => e.key === "Escape" && onClose()}
+            onKeyDown={(e) => {
+              if (e.key === "Escape") {
+                if (editing) cancelEdit();
+                else onClose();
+              }
+            }}
             maxLength={1000}
             disabled={!canChat}
-            placeholder="Message"
+            placeholder={editing ? "Edit message" : "Message"}
             enterKeyHint="send"
             autoComplete="off"
             className="flex-1 min-w-0 bg-transparent text-[15px] text-[#111b21] outline-none placeholder:text-[#667781] disabled:opacity-50"
@@ -428,7 +596,7 @@ const ChatPanel = ({
           <button
             type="button"
             onClick={() => fileRef.current?.click()}
-            disabled={!canChat || processing}
+            disabled={!canChat || processing || Boolean(editing)}
             aria-label="Send a photo"
             title="Send a photo"
             className="w-9 h-9 shrink-0 rounded-full flex items-center justify-center text-[#54656f] hover:bg-black/5 disabled:opacity-40 disabled:cursor-not-allowed"
@@ -439,13 +607,91 @@ const ChatPanel = ({
         <button
           type="submit"
           disabled={!text.trim() || !canChat}
-          aria-label="Send message"
+          aria-label={editing ? "Save edit" : "Send message"}
           className="w-11 h-11 shrink-0 rounded-full flex items-center justify-center text-white shadow-sm transition-opacity disabled:opacity-50 disabled:cursor-not-allowed focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[#00a884]"
           style={{ background: WA.send }}
         >
-          <Icon name="send" className="w-5 h-5" />
+          <Icon name={editing ? "tick" : "send"} className="w-5 h-5" />
         </button>
       </form>
+
+      {/* Message menu (bottom sheet) */}
+      {menu && sel && (
+        <div
+          className="absolute inset-0 z-20 flex flex-col justify-end bg-black/40"
+          onClick={() => setMenu(null)}
+          role="dialog"
+          aria-label="Message options"
+        >
+          <div
+            className="rounded-t-2xl bg-white shadow-2xl py-2"
+            style={{ paddingBottom: "max(0.5rem, env(safe-area-inset-bottom))" }}
+            onClick={(e) => e.stopPropagation()}
+          >
+            {menu.step === "main" ? (
+              <>
+                {!sel.deleted && (
+                  <SheetRow icon="reply" label="Reply" onClick={() => startReply(sel)} />
+                )}
+                {!sel.deleted && sel.text && (
+                  <SheetRow
+                    icon="copy"
+                    label="Copy"
+                    onClick={() => {
+                      copyToClipboard(sel.text);
+                      setMenu(null);
+                    }}
+                  />
+                )}
+                {canEditSel && (
+                  <SheetRow
+                    icon="edit"
+                    label="Edit"
+                    hint={!online ? "Friend is offline" : undefined}
+                    disabled={!canChat}
+                    onClick={() => startEdit(sel)}
+                  />
+                )}
+                <SheetRow
+                  icon="trash"
+                  label="Delete"
+                  danger
+                  onClick={() => setMenu({ msg: sel, step: "delete" })}
+                />
+              </>
+            ) : (
+              <>
+                <div className="px-5 pt-3 pb-2 text-[15px] font-medium text-[#111b21]">
+                  Delete message?
+                </div>
+                {canDeleteEveryoneSel && (
+                  <SheetRow
+                    label="Delete for everyone"
+                    danger
+                    hint={!online ? "Friend is offline" : undefined}
+                    disabled={!canChat}
+                    onClick={() => {
+                      onDeleteForEveryone?.(sel.id);
+                      setMenu(null);
+                    }}
+                  />
+                )}
+                <SheetRow
+                  label="Delete for me"
+                  danger
+                  onClick={() => {
+                    onDeleteForMe?.(sel.id);
+                    if (replyTo?.id === sel.id) setReplyTo(null);
+                    if (editing?.id === sel.id) cancelEdit();
+                    setMenu(null);
+                  }}
+                />
+                <SheetRow label="Cancel" onClick={() => setMenu(null)} />
+              </>
+            )}
+          </div>
+        </div>
+      )}
 
       {/* Photo preview (bhejne se pehle, caption ke saath) */}
       {pending && (
@@ -464,7 +710,15 @@ const ChatPanel = ({
           <div className="flex-1 min-h-0 flex items-center justify-center p-3">
             <img src={pending.dataUrl} alt="Selected photo preview" className="max-w-full max-h-full object-contain rounded-md" />
           </div>
-          {replyTo && <ReplyBar reply={replyTo} name={target.deviceName} onCancel={() => setReplyTo(null)} />}
+          {replyTo && (
+            <ContextBar
+              color={replyTo.from === "me" ? WA.quoteMe : WA.quoteThem}
+              title={replyTo.from === "me" ? "You" : target.deviceName}
+              body={quoteLabel(replyTo.kind, replyTo.text)}
+              onCancel={() => setReplyTo(null)}
+              cancelLabel="Cancel reply"
+            />
+          )}
           <form onSubmit={sendPending} className="flex items-center gap-2 px-2 py-2 shrink-0" style={{ paddingBottom: "max(0.5rem, env(safe-area-inset-bottom))" }}>
             <div className="flex-1 min-w-0 rounded-full bg-white px-4 py-2.5 shadow-sm">
               <input

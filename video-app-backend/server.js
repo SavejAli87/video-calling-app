@@ -23,7 +23,7 @@ const METERED_API_KEY = process.env.METERED_API_KEY || "YOUR_METERED_API_KEY";
 app.use(express.static(path.join(__dirname, "public")));
 
 // Deploy check: browser me <backend-url>/version kholo. {"chat":true} aaye to naya code live hai.
-app.get("/version", (req, res) => res.json({ chat: true, version: 4, friends: true, images: true }));
+app.get("/version", (req, res) => res.json({ chat: true, version: 5, friends: true, images: true }));
 
 // Dynamic TURN credentials API endpoint
 // app.get("/api/turn-credentials", async (req, res) => {

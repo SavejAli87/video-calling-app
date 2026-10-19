@@ -2,7 +2,7 @@ const crypto = require("crypto");
 const { setupChat } = require("./src/chatHandler");
 
 const RING_TIMEOUT_MS = 45000;
-const SERVER_VERSION = 4;
+const SERVER_VERSION = 5;
 const MAX_FRIENDS = 500;
 const MAX_OUTGOING_REQUESTS = 20;
 const REQUEST_GRACE_MS = 15000; // reload/reconnect par pending requests turant na hatein

@@ -24,8 +24,8 @@ const RoundButton = ({ icon, label, onClick, disabled, badge = 0, tone = "blue" 
     aria-label={label}
     title={label}
     className={`relative shrink-0 w-10 h-10 rounded-full border flex items-center justify-center transition-colors disabled:opacity-40 disabled:cursor-not-allowed focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[#1a73e8] ${tone === "red"
-      ? "border-[#dadce0] text-[#5f6368] hover:bg-[#fce8e6] hover:text-[#d93025]"
-      : "border-[#dadce0] text-[#1a73e8] hover:bg-[#e8f0fe]"
+        ? "border-[#dadce0] text-[#5f6368] hover:bg-[#fce8e6] hover:text-[#d93025]"
+        : "border-[#dadce0] text-[#1a73e8] hover:bg-[#e8f0fe]"
       }`}
   >
     <Icon name={icon} className="w-5 h-5" />
@@ -87,6 +87,8 @@ const Lobby = ({
   requests = { incoming: [], outgoing: [] },
   unread = {},
   serverOutdated,
+  soundOn = true,
+  onToggleSound,
   onCall,
   onChat,
   onAddFriend,
@@ -141,6 +143,14 @@ const Lobby = ({
           <span className="hidden sm:inline">
             {timeLabel} &bull; {dateLabel}
           </span>
+          <button
+            onClick={onToggleSound}
+            aria-label={soundOn ? "Mute ringtone and message sounds" : "Unmute ringtone and message sounds"}
+            title={soundOn ? "Sounds on" : "Sounds off"}
+            className="w-9 h-9 rounded-full hover:bg-[#f1f3f4] flex items-center justify-center text-[#5f6368] focus-visible:outline focus-visible:outline-2 focus-visible:outline-[#1a73e8]"
+          >
+            <Icon name={soundOn ? "volume" : "volumeOff"} className="w-5 h-5" />
+          </button>
           <Avatar name={deviceName} size={36} />
         </div>
       </header>

@@ -35,6 +35,8 @@ const WebRTCCall = () => {
         requests={call.friendRequests}
         unread={call.unread}
         serverOutdated={call.serverOutdated}
+        soundOn={call.soundOn}
+        onToggleSound={call.toggleSound}
         onCall={call.handleCallDevice}
         onChat={call.openChat}
         onAddFriend={call.sendFriendRequest}
@@ -72,6 +74,9 @@ const WebRTCCall = () => {
         chatSupported={!call.serverOutdated}
         mode={call.inCall ? "call" : "lobby"}
         onSend={call.sendMessage}
+        onEdit={call.editMessage}
+        onDeleteForMe={call.deleteForMe}
+        onDeleteForEveryone={call.deleteForEveryone}
         onTyping={call.sendTyping}
         onClose={call.closeChat}
       />

@@ -89,3 +89,39 @@ export const fileToCompressedDataUrl = (file, { maxDim = 1280, maxChars = 700000
     };
     img.src = url;
   });
+
+// ---------------------------------------------------------------- message helpers
+/** 24 ghante (ttl) se purane messages hata do. Kuch na hataya ho to wahi object wapas (re-render nahi). */
+export const pruneExpired = (messagesByPeer, now, ttl) => {
+  let changed = false;
+  const next = {};
+  for (const [peer, list] of Object.entries(messagesByPeer)) {
+    const kept = list.filter((m) => now - m.timestamp <= ttl);
+    if (kept.length !== list.length) changed = true;
+    if (kept.length) next[peer] = kept;
+  }
+  return changed ? next : messagesByPeer;
+};
+
+/** Storage se aaye messages ko live state ke saath milao (same id ho to live wala jeetta hai). */
+export const mergeMessages = (restored, live) => {
+  const out = { ...live };
+  for (const [peer, list] of Object.entries(restored)) {
+    const current = live[peer] || [];
+    const seen = new Set(current.map((m) => m.id));
+    const merged = [...list.filter((m) => !seen.has(m.id)), ...current];
+    merged.sort((a, b) => a.timestamp - b.timestamp);
+    out[peer] = merged;
+  }
+  return out;
+};
+
+// Deleted-for-everyone ka placeholder
+export const toDeletedMessage = (m) => ({
+  ...m,
+  deleted: true,
+  text: "",
+  image: null,
+  replyTo: null,
+  edited: false,
+});

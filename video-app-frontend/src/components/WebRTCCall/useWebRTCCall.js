@@ -7,8 +7,20 @@ import {
   MAX_NAME_LENGTH,
   DEVICE_ID_KEY,
   FRIENDS_KEY,
+  SOUND_KEY,
+  MESSAGE_TTL_MS,
 } from "./constants";
-import { normalizeName } from "./utils";
+import { normalizeName, pruneExpired, mergeMessages, toDeletedMessage } from "./utils";
+import { loadMessages, putMessages, deleteMessages } from "./messageStore";
+import {
+  unlockAudio,
+  setSoundEnabled,
+  startRingtone,
+  stopRingtone,
+  startRingback,
+  stopRingback,
+  playMessageTone,
+} from "./sounds";
 
 const RING_TIMEOUT_MS = 30000;
 const ACK_TIMEOUT_MS = 6000;
@@ -19,6 +31,14 @@ const loadName = () => {
     return normalizeName(localStorage.getItem(NAME_KEY), MAX_NAME_LENGTH);
   } catch {
     return "";
+  }
+};
+
+const loadSound = () => {
+  try {
+    return localStorage.getItem(SOUND_KEY) !== "off";
+  } catch {
+    return true;
   }
 };
 
@@ -86,6 +106,8 @@ const useWebRTCCall = () => {
   const [friends, setFriends] = useState(loadFriends); // [{ id, name }]
   const [friendRequests, setFriendRequests] = useState({ incoming: [], outgoing: [] });
   const [serverOutdated, setServerOutdated] = useState(false);
+  const [soundOn, setSoundOn] = useState(loadSound);
+  const [callingOut, setCallingOut] = useState(false); // caller: samne wale ki ring baj rahi hai
 
   // Chat (publicId se key: friend ka socketId reconnect par badalta hai, publicId nahi)
   const [chatTarget, setChatTarget] = useState(null); // { publicId, deviceName } | null
@@ -113,6 +135,9 @@ const useWebRTCCall = () => {
   const replacedRef = useRef(false);
   const messagesRef = useRef({});
   const seenSentRef = useRef(new Set()); // jin messages ki "seen" receipt bhej chuke hain
+  const hydratedRef = useRef(false); // storage se messages load ho chuke
+  const persistedRef = useRef(new Map()); // "peer|id" -> last saved message object
+  const devicesRef = useRef([]);
 
   const localVideoRef = useRef(null);
   const remoteVideoRef = useRef(null);
@@ -133,6 +158,118 @@ const useWebRTCCall = () => {
     const t = setInterval(() => setSeconds((s) => s + 1), 1000);
     return () => clearInterval(t);
   }, [inCall, remoteReady]);
+
+  // ------------------------------------------------------------- Sounds
+  useEffect(() => {
+    setSoundEnabled(soundOn);
+  }, [soundOn]);
+
+  // Browser pehle tap/key ke baad hi awaaz bajane deta hai
+  useEffect(() => {
+    const unlock = () => unlockAudio();
+    const events = ["pointerdown", "keydown", "touchstart"];
+    events.forEach((e) => window.addEventListener(e, unlock, { passive: true }));
+    return () => events.forEach((e) => window.removeEventListener(e, unlock));
+  }, []);
+
+  // Incoming call: popup dikhte hi ringtone, accept/decline/cancel par band
+  useEffect(() => {
+    if (!incomingCall) return;
+    startRingtone();
+    return () => stopRingtone();
+  }, [incomingCall]);
+
+  // Caller ko ringback tone jab tak samne wala utha na le
+  useEffect(() => {
+    if (!callingOut) return;
+    startRingback();
+    return () => stopRingback();
+  }, [callingOut]);
+
+  const toggleSound = useCallback(() => {
+    const next = !soundOn;
+    try {
+      localStorage.setItem(SOUND_KEY, next ? "on" : "off");
+    } catch {
+      /* storage blocked */
+    }
+    setSoundOn(next);
+  }, [soundOn]);
+
+  // -------------------------------------- Messages: 24h storage + auto-delete
+  // Server kuch store nahi karta. Har device apni copy IndexedDB me 24 ghante rakhta hai.
+  useEffect(() => {
+    let cancelled = false;
+
+    loadMessages(MESSAGE_TTL_MS).then((byPeer) => {
+      if (cancelled) return;
+
+      const restored = {};
+      const restoredUnread = {};
+      for (const [peer, list] of Object.entries(byPeer)) {
+        restored[peer] = list.map((m) => {
+          // Bhejte-bhejte band hua message ab "Not delivered" hai
+          const fixed = m.status === "sending" ? { ...m, status: "failed" } : m;
+          if (fixed === m) persistedRef.current.set(`${peer}|${m.id}`, m);
+          if (fixed.sender === "them") {
+            if (fixed.seen) seenSentRef.current.add(fixed.id);
+            else if (!fixed.deleted) restoredUnread[peer] = (restoredUnread[peer] || 0) + 1;
+          }
+          return fixed;
+        });
+      }
+
+      hydratedRef.current = true;
+      setMessages((prev) => mergeMessages(restored, prev));
+      if (Object.keys(restoredUnread).length) {
+        setUnread((prev) => {
+          const next = { ...prev };
+          for (const [p, n] of Object.entries(restoredUnread)) next[p] = (next[p] || 0) + n;
+          return next;
+        });
+      }
+    });
+
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  // State me jo badla (naya / edit / status / delete) wo storage me likho
+  useEffect(() => {
+    if (!hydratedRef.current) return;
+
+    const toPut = [];
+    const present = new Set();
+    for (const [peerId, list] of Object.entries(messages)) {
+      for (const msg of list) {
+        const key = `${peerId}|${msg.id}`;
+        present.add(key);
+        if (persistedRef.current.get(key) !== msg) {
+          persistedRef.current.set(key, msg);
+          toPut.push({ peerId, msg });
+        }
+      }
+    }
+    const toDelete = [];
+    for (const key of persistedRef.current.keys()) {
+      if (!present.has(key)) {
+        persistedRef.current.delete(key);
+        toDelete.push(key);
+      }
+    }
+    if (toPut.length) putMessages(toPut);
+    if (toDelete.length) deleteMessages(toDelete);
+  }, [messages]);
+
+  // 24 ghante poore hote hi message khud delete (page khula ho tab bhi)
+  useEffect(() => {
+    const t = setInterval(
+      () => setMessages((prev) => pruneExpired(prev, Date.now(), MESSAGE_TTL_MS)),
+      30000
+    );
+    return () => clearInterval(t);
+  }, []);
 
   // -------------------------------------------------------- Call cleanup
   const cleanupCall = useCallback(() => {
@@ -167,6 +304,7 @@ const useWebRTCCall = () => {
     pendingIceCandidatesRef.current = [];
 
     setInCall(false);
+    setCallingOut(false);
     setRemoteReady(false);
     setMicOn(true);
     setCamOn(true);
@@ -493,6 +631,93 @@ const useWebRTCCall = () => {
     });
   }, []);
 
+  // ----------------------------------------------------- Edit / delete messages
+  const friendOnline = useCallback(
+    (publicId) => devicesRef.current.some((d) => d.publicId === publicId),
+    []
+  );
+
+  const findMessage = useCallback((id) => {
+    const target = chatTargetRef.current;
+    if (!target) return null;
+    return (messagesRef.current[target.publicId] || []).find((m) => m.id === id) || null;
+  }, []);
+
+  // Apna text message edit karo (friend ke paas bhi badal jata hai)
+  const editMessage = useCallback(
+    (id, text) => {
+      const target = chatTargetRef.current;
+      const socket = socketRef.current;
+      const clean = (text || "").trim().slice(0, 1000);
+      const msg = findMessage(id);
+      if (!target || !clean || !msg) return false;
+      if (msg.sender !== "me" || msg.deleted || !msg.text) return false;
+
+      if (!socket?.connected) {
+        showToast("Server connection lost. Edit not sent.");
+        return false;
+      }
+      if (!friendOnline(target.publicId)) {
+        showToast("Your friend is offline. Try editing when they're online.");
+        return false;
+      }
+
+      setMessages((prev) => ({
+        ...prev,
+        [target.publicId]: (prev[target.publicId] || []).map((m) =>
+          m.id === id ? { ...m, text: clean, edited: true } : m
+        ),
+      }));
+      socket.emit("edit-private-message", { targetPublicId: target.publicId, id, text: clean });
+      return true;
+    },
+    [findMessage, friendOnline, showToast]
+  );
+
+  // Sirf mere device se hatao
+  const deleteForMe = useCallback((id) => {
+    const target = chatTargetRef.current;
+    if (!target) return;
+    setMessages((prev) => {
+      const list = prev[target.publicId];
+      if (!list) return prev;
+      return { ...prev, [target.publicId]: list.filter((m) => m.id !== id) };
+    });
+  }, []);
+
+  // Dono taraf se hatao (apna message). Jo message friend tak pahuncha hi nahi, wo bas local hata do.
+  const deleteForEveryone = useCallback(
+    (id) => {
+      const target = chatTargetRef.current;
+      const socket = socketRef.current;
+      const msg = findMessage(id);
+      if (!target || !msg || msg.sender !== "me") return false;
+
+      if (msg.status === "failed" || msg.status === "sending") {
+        deleteForMe(id);
+        return true;
+      }
+      if (!socket?.connected) {
+        showToast("Server connection lost. Try again.");
+        return false;
+      }
+      if (!friendOnline(target.publicId)) {
+        showToast("Your friend is offline. You can delete it for yourself only.");
+        return false;
+      }
+
+      setMessages((prev) => ({
+        ...prev,
+        [target.publicId]: (prev[target.publicId] || []).map((m) =>
+          m.id === id ? toDeletedMessage(m) : m
+        ),
+      }));
+      socket.emit("delete-private-message", { targetPublicId: target.publicId, id });
+      return true;
+    },
+    [findMessage, deleteForMe, friendOnline, showToast]
+  );
+
   // ---------------------------------------------------------- Seen receipts
   // Chat us friend ke saath khula ho AUR page dikh raha ho -> unke naye messages "seen" bhejo.
   const flushSeen = useCallback(() => {
@@ -509,6 +734,17 @@ const useWebRTCCall = () => {
 
     ids.forEach((id) => seenSentRef.current.add(id));
     socket.emit("messages-seen", { targetPublicId: target.publicId, ids });
+
+    // Reload ke baad dobara "seen" na bheje aur unread badge sahi rahe: flag message par save karo
+    const sent = new Set(ids);
+    setMessages((prev) => {
+      const l = prev[target.publicId];
+      if (!l) return prev;
+      return {
+        ...prev,
+        [target.publicId]: l.map((m) => (sent.has(m.id) ? { ...m, seen: true } : m)),
+      };
+    });
   }, []);
 
   useEffect(() => {
@@ -532,6 +768,22 @@ const useWebRTCCall = () => {
     friendsRef.current = next;
     saveFriends(next);
     setFriends(next);
+  }, []);
+
+  // Unfriend par is dost ki chat history aur unread hata do
+  const clearThread = useCallback((publicId) => {
+    setMessages((prev) => {
+      if (!prev[publicId]) return prev;
+      const next = { ...prev };
+      delete next[publicId];
+      return next;
+    });
+    setUnread((prev) => {
+      if (!prev[publicId]) return prev;
+      const next = { ...prev };
+      delete next[publicId];
+      return next;
+    });
   }, []);
 
   const requireConnection = useCallback(() => {
@@ -569,10 +821,11 @@ const useWebRTCCall = () => {
   const removeFriend = useCallback(
     (publicId) => {
       commitFriends(friendsRef.current.filter((f) => f.id !== publicId));
+      clearThread(publicId);
       if (chatTargetRef.current?.publicId === publicId) closeChat();
       socketRef.current?.emit("remove-friend", { friendPublicId: publicId });
     },
-    [commitFriends, closeChat]
+    [commitFriends, clearThread, closeChat]
   );
 
   // ------------------------------------------------------ Socket lifecycle
@@ -601,7 +854,7 @@ const useWebRTCCall = () => {
     };
 
     socket.on("server-info", (info) => {
-      const ok = Boolean(info?.chat && info?.friends && (info?.version || 0) >= 4);
+      const ok = Boolean(info?.chat && info?.friends && (info?.version || 0) >= 5);
       serverReadyRef.current = ok;
       setServerOutdated(!ok);
       clearTimeout(serverCheckTimer);
@@ -657,6 +910,7 @@ const useWebRTCCall = () => {
     });
 
     socket.on("device-list", (deviceList) => {
+      devicesRef.current = deviceList;
       setDevices(deviceList);
 
       // Friends ke naam badle hon to saved list update karo
@@ -684,6 +938,7 @@ const useWebRTCCall = () => {
     });
 
     socket.on("friend-request-received", ({ name }) => {
+      playMessageTone();
       showToast(`${name || "Someone"} sent you a friend request`);
     });
 
@@ -702,6 +957,7 @@ const useWebRTCCall = () => {
       const existing = friendsRef.current.find((f) => f.id === publicId);
       if (!existing) return;
       commitFriends(friendsRef.current.filter((f) => f.id !== publicId));
+      clearThread(publicId);
       if (chatTargetRef.current?.publicId === publicId) {
         chatTargetRef.current = null;
         setChatTarget(null);
@@ -727,6 +983,7 @@ const useWebRTCCall = () => {
     socket.on("call-accepted", async (data) => {
       try {
         clearTimeout(ringTimerRef.current);
+        setCallingOut(false);
         callAcceptedRef.current = true;
         currentTargetRef.current = data.targetSocketId;
         const localStream = await startCamera();
@@ -825,6 +1082,7 @@ const useWebRTCCall = () => {
     // ------------------------------------------------------------- Chat events
     socket.on("receive-private-message", (m) => {
       const from = m.senderPublicId;
+      playMessageTone();
 
       setMessages((prev) => ({
         ...prev,
@@ -864,6 +1122,45 @@ const useWebRTCCall = () => {
           setTyping((prev) => ({ ...prev, [senderPublicId]: false }));
         }, 4000);
       }
+    });
+
+    // Friend ne apna message edit kiya. Server store nahi karta, isliye yahin check hota hai:
+    // edit tabhi lagta hai jab wo message is thread me USI friend ka ho (koi doosre ka message nahi badal sakta).
+    socket.on("message-edited", ({ byPublicId, id, text }) => {
+      setMessages((prev) => {
+        const list = prev[byPublicId];
+        if (!list) return prev;
+        let changed = false;
+        const next = list.map((m) => {
+          if (m.id === id && m.sender === "them" && !m.deleted) {
+            changed = true;
+            return { ...m, text, edited: true };
+          }
+          return m;
+        });
+        return changed ? { ...prev, [byPublicId]: next } : prev;
+      });
+    });
+
+    // Friend ne "delete for everyone" kiya
+    socket.on("message-deleted", ({ byPublicId, id }) => {
+      setMessages((prev) => {
+        const list = prev[byPublicId];
+        if (!list) return prev;
+        let changed = false;
+        const next = list.map((m) => {
+          if (m.id === id && m.sender === "them" && !m.deleted) {
+            changed = true;
+            return toDeletedMessage(m);
+          }
+          return m;
+        });
+        return changed ? { ...prev, [byPublicId]: next } : prev;
+      });
+    });
+
+    socket.on("message-action-error", ({ message }) => {
+      showToast(message || "That action could not be delivered.");
     });
 
     // Samne wale ne mere messages dekh liye -> ticks pink
@@ -908,6 +1205,7 @@ const useWebRTCCall = () => {
     flushPendingIceCandidates,
     updateMessageStatus,
     commitFriends,
+    clearThread,
     showToast,
   ]);
 
@@ -950,6 +1248,7 @@ const useWebRTCCall = () => {
       setInCall(true);
       setStatus(`Calling ${device.deviceName}...`);
       socketRef.current.emit("call-device", { targetSocketId: device.socketId });
+      setCallingOut(true);
 
       clearTimeout(ringTimerRef.current);
       ringTimerRef.current = setTimeout(() => {
@@ -1005,6 +1304,8 @@ const useWebRTCCall = () => {
     toast,
     seconds,
     serverOutdated,
+    soundOn,
+    toggleSound,
     // friends
     friendsView,
     strangers,
@@ -1034,6 +1335,9 @@ const useWebRTCCall = () => {
     toggleCallChat,
     sendMessage,
     sendTyping,
+    editMessage,
+    deleteForMe,
+    deleteForEveryone,
   };
 };
 

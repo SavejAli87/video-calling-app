@@ -8,6 +8,10 @@ export const NAME_KEY = "displayName";
 // Permanent device identity + friends list (dono isi browser me save hote hain)
 export const DEVICE_ID_KEY = "deviceId";
 export const FRIENDS_KEY = "friends";
+// Sound on/off preference
+export const SOUND_KEY = "soundEnabled";
+// Message sirf itne der valid rehta hai (bhejne ke 24 ghante baad auto-delete)
+export const MESSAGE_TTL_MS = 24 * 60 * 60 * 1000;
 export const MAX_NAME_LENGTH = 30;
 
 export const RTC_CONFIG = {

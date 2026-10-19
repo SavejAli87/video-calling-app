@@ -1,7 +1,8 @@
 /**
  * chatHandler.js
  * 1-to-1 instant messaging - sirf FRIENDS ke beech.
- * Text, photo, reply (quoted message) aur "seen" receipts.
+ * Text, photo, reply (quoted message), "seen" receipts, edit aur delete-for-everyone.
+ * Server koi message STORE nahi karta: har device apni copy 24 ghante rakhta hai.
  * Target publicId se hota hai (socketId reconnect par badal jata hai).
  */
 const crypto = require("crypto");
@@ -48,20 +49,22 @@ function setupChat(io, socket, { devices, socketOfPublic, areFriends }) {
       }
       if (!text && !hasImage) return;
 
-      if (!areFriends(sender.publicId, targetPublicId)) {
-        return socket.emit("message-error", {
-          targetPublicId,
-          clientId: id,
-          message: "You can only message friends.",
-        });
-      }
-
+      // Offline device ki claims server ke paas nahi hoti, isliye friendship verify nahi ho sakti:
+      // pehle "offline" batao, phir online hone par friend check karo.
       const targetSocketId = socketOfPublic.get(targetPublicId);
       if (!targetSocketId) {
         return socket.emit("message-error", {
           targetPublicId,
           clientId: id,
           message: "Friend is offline. Message was not delivered.",
+        });
+      }
+
+      if (!areFriends(sender.publicId, targetPublicId)) {
+        return socket.emit("message-error", {
+          targetPublicId,
+          clientId: id,
+          message: "You can only message friends.",
         });
       }
 
@@ -101,7 +104,56 @@ function setupChat(io, socket, { devices, socketOfPublic, areFriends }) {
     io.to(targetSocketId).emit("messages-seen", { byPublicId: me.publicId, ids: clean });
   });
 
-  // 3. Typing indicator
+  // 3. Message edit (sirf text). Server store nahi karta, isliye authorship receiver ka client check karta hai:
+  //    wo edit tabhi lagata hai jab wo message us conversation me us sender ka ho.
+  socket.on("edit-private-message", ({ targetPublicId, id, text } = {}) => {
+    const me = devices.get(socket.id);
+    if (!me || typeof targetPublicId !== "string" || typeof id !== "string" || !id || id.length > 64) return;
+
+    const clean = typeof text === "string" ? text.trim().slice(0, MAX_MESSAGE_LENGTH) : "";
+    if (!clean) return;
+
+    const targetSocketId = socketOfPublic.get(targetPublicId);
+    if (!targetSocketId) {
+      return socket.emit("message-action-error", {
+        targetPublicId,
+        id,
+        message: "Friend is offline. The edit was not delivered.",
+      });
+    }
+    if (!areFriends(me.publicId, targetPublicId)) {
+      return socket.emit("message-action-error", { targetPublicId, id, message: "You can only message friends." });
+    }
+
+    io.to(targetSocketId).emit("message-edited", {
+      byPublicId: me.publicId,
+      id,
+      text: clean,
+      editedAt: Date.now(),
+    });
+  });
+
+  // 4. Delete for everyone
+  socket.on("delete-private-message", ({ targetPublicId, id } = {}) => {
+    const me = devices.get(socket.id);
+    if (!me || typeof targetPublicId !== "string" || typeof id !== "string" || !id || id.length > 64) return;
+
+    const targetSocketId = socketOfPublic.get(targetPublicId);
+    if (!targetSocketId) {
+      return socket.emit("message-action-error", {
+        targetPublicId,
+        id,
+        message: "Friend is offline. The message was not deleted for them.",
+      });
+    }
+    if (!areFriends(me.publicId, targetPublicId)) {
+      return socket.emit("message-action-error", { targetPublicId, id, message: "You can only message friends." });
+    }
+
+    io.to(targetSocketId).emit("message-deleted", { byPublicId: me.publicId, id });
+  });
+
+  // 5. Typing indicator
   socket.on("typing-indicator", ({ targetPublicId, isTyping } = {}) => {
     const sender = devices.get(socket.id);
     const targetSocketId = socketOfPublic.get(targetPublicId);
