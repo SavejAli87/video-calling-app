@@ -1,6 +1,7 @@
 import React, { useState, useEffect } from "react";
 import Avatar from "./Avatar";
 import Icon from "./Icon";
+import Logo from "../../assets/Logo.jpg"
 
 const TABS = [
   { id: "friends", label: "Friends" },
@@ -22,11 +23,10 @@ const RoundButton = ({ icon, label, onClick, disabled, badge = 0, tone = "blue" 
     disabled={disabled}
     aria-label={label}
     title={label}
-    className={`relative shrink-0 w-10 h-10 rounded-full border flex items-center justify-center transition-colors disabled:opacity-40 disabled:cursor-not-allowed focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[#1a73e8] ${
-      tone === "red"
-        ? "border-[#dadce0] text-[#5f6368] hover:bg-[#fce8e6] hover:text-[#d93025]"
-        : "border-[#dadce0] text-[#1a73e8] hover:bg-[#e8f0fe]"
-    }`}
+    className={`relative shrink-0 w-10 h-10 rounded-full border flex items-center justify-center transition-colors disabled:opacity-40 disabled:cursor-not-allowed focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[#1a73e8] ${tone === "red"
+      ? "border-[#dadce0] text-[#5f6368] hover:bg-[#fce8e6] hover:text-[#d93025]"
+      : "border-[#dadce0] text-[#1a73e8] hover:bg-[#e8f0fe]"
+      }`}
   >
     <Icon name={icon} className="w-5 h-5" />
     {badge > 0 && (
@@ -126,10 +126,15 @@ const Lobby = ({
       <header className="flex items-center justify-between px-4 sm:px-6 py-3">
         <div className="flex items-center gap-2">
           <div className="w-9 h-9 rounded-lg bg-[#1a73e8] flex items-center justify-center text-white">
-            <Icon name="video" className="w-5 h-5" />
+            {/* <Icon name="video" className="w-5 h-5" /> */}
+            <img
+              src={Logo}
+              alt="DilConnect Logo"
+              className="w-9 h-9 object-cover rounded-lg"
+            />
           </div>
           <span className="text-xl sm:text-[22px] text-[#5f6368]">
-            Video <span className="font-medium">Call</span>
+            <span className="font-medium">DilConnect</span>
           </span>
         </div>
         <div className="flex items-center gap-4 text-[#5f6368] text-sm sm:text-base">
@@ -192,9 +197,8 @@ const Lobby = ({
                   role="tab"
                   aria-selected={active}
                   onClick={() => setTab(t.id)}
-                  className={`relative flex-1 flex items-center justify-center gap-1.5 px-2 py-3.5 text-sm font-medium transition-colors ${
-                    active ? "text-[#1a73e8]" : "text-[#5f6368] hover:bg-[#f8f9fa]"
-                  }`}
+                  className={`relative flex-1 flex items-center justify-center gap-1.5 px-2 py-3.5 text-sm font-medium transition-colors ${active ? "text-[#1a73e8]" : "text-[#5f6368] hover:bg-[#f8f9fa]"
+                    }`}
                 >
                   {t.label}
                   <Badge count={badge} />
@@ -247,9 +251,8 @@ const Lobby = ({
                       <div className="relative shrink-0">
                         <Avatar name={f.name} size={44} />
                         <span
-                          className={`absolute -bottom-0.5 -right-0.5 w-3.5 h-3.5 rounded-full border-2 border-white ${
-                            f.online ? "bg-[#188038]" : "bg-[#bdc1c6]"
-                          }`}
+                          className={`absolute -bottom-0.5 -right-0.5 w-3.5 h-3.5 rounded-full border-2 border-white ${f.online ? "bg-[#188038]" : "bg-[#bdc1c6]"
+                            }`}
                         />
                       </div>
 

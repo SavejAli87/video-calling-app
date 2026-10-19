@@ -111,6 +111,8 @@ const useWebRTCCall = () => {
   const registerRef = useRef(null);
   const friendsRef = useRef(friends);
   const replacedRef = useRef(false);
+  const messagesRef = useRef({});
+  const seenSentRef = useRef(new Set()); // jin messages ki "seen" receipt bhej chuke hain
 
   const localVideoRef = useRef(null);
   const remoteVideoRef = useRef(null);
@@ -404,7 +406,10 @@ const useWebRTCCall = () => {
       if (!list) return prev;
       return {
         ...prev,
-        [targetPublicId]: list.map((m) => (m.id === clientId ? { ...m, status } : m)),
+        // "seen" ko wapas "delivered" mat karo (ack seen ke baad aa sakta hai)
+        [targetPublicId]: list.map((m) =>
+          m.id === clientId && m.status !== "seen" ? { ...m, status } : m
+        ),
       };
     });
   }, []);
@@ -422,12 +427,24 @@ const useWebRTCCall = () => {
     });
   }, []);
 
+  // payload: "text"  YA  { text?, image? (data-URL), replyTo? { id, from, text, kind } }
   const sendMessage = useCallback(
-    (text) => {
+    (payload) => {
       const target = chatTargetRef.current;
       const socket = socketRef.current;
-      const clean = (text || "").trim();
-      if (!target || !clean) return;
+      const p = typeof payload === "string" ? { text: payload } : payload || {};
+      const clean = (p.text || "").trim();
+      const image = typeof p.image === "string" && p.image ? p.image : null;
+      if (!target || (!clean && !image)) return;
+
+      const replyTo = p.replyTo?.id
+        ? {
+            id: String(p.replyTo.id),
+            from: p.replyTo.from === "me" ? "me" : "them",
+            text: String(p.replyTo.text || "").slice(0, 200),
+            kind: p.replyTo.kind === "image" ? "image" : "text",
+          }
+        : null;
 
       if (!socket?.connected) {
         showToast("Server connection lost. Message not sent.");
@@ -444,17 +461,25 @@ const useWebRTCCall = () => {
         ...prev,
         [target.publicId]: [
           ...(prev[target.publicId] || []),
-          { id: clientId, sender: "me", text: clean, timestamp: Date.now(), status: "sending" },
+          { id: clientId, sender: "me", text: clean, image, replyTo, timestamp: Date.now(), status: "sending" },
         ],
       }));
 
       socket.emit("send-private-message", {
         targetPublicId: target.publicId,
         message: clean,
+        image,
+        replyTo: replyTo
+          ? { id: replyTo.id, text: replyTo.text, kind: replyTo.kind, mine: replyTo.from === "me" }
+          : null,
         clientId,
       });
 
-      setTimeout(() => failIfPending(target.publicId, clientId), ACK_TIMEOUT_MS);
+      // Photo ke liye zyada time (slow mobile network)
+      setTimeout(
+        () => failIfPending(target.publicId, clientId),
+        image ? ACK_TIMEOUT_MS * 3 : ACK_TIMEOUT_MS
+      );
     },
     [showToast, failIfPending]
   );
@@ -467,6 +492,39 @@ const useWebRTCCall = () => {
       isTyping,
     });
   }, []);
+
+  // ---------------------------------------------------------- Seen receipts
+  // Chat us friend ke saath khula ho AUR page dikh raha ho -> unke naye messages "seen" bhejo.
+  const flushSeen = useCallback(() => {
+    const target = chatTargetRef.current;
+    const socket = socketRef.current;
+    if (!target || !socket?.connected) return;
+    if (typeof document !== "undefined" && document.visibilityState !== "visible") return;
+
+    const list = messagesRef.current[target.publicId] || [];
+    const ids = list
+      .filter((m) => m.sender === "them" && !seenSentRef.current.has(m.id))
+      .map((m) => m.id);
+    if (!ids.length) return;
+
+    ids.forEach((id) => seenSentRef.current.add(id));
+    socket.emit("messages-seen", { targetPublicId: target.publicId, ids });
+  }, []);
+
+  useEffect(() => {
+    messagesRef.current = messages;
+    flushSeen();
+  }, [messages, chatTarget, flushSeen]);
+
+  useEffect(() => {
+    const onVisible = () => flushSeen();
+    document.addEventListener("visibilitychange", onVisible);
+    window.addEventListener("focus", onVisible);
+    return () => {
+      document.removeEventListener("visibilitychange", onVisible);
+      window.removeEventListener("focus", onVisible);
+    };
+  }, [flushSeen]);
 
   // --------------------------------------------------------------- Friends
   // friendsRef hamesha latest list rakhta hai (socket handlers me stale closure nahi)
@@ -543,7 +601,7 @@ const useWebRTCCall = () => {
     };
 
     socket.on("server-info", (info) => {
-      const ok = Boolean(info?.chat && info?.friends);
+      const ok = Boolean(info?.chat && info?.friends && (info?.version || 0) >= 4);
       serverReadyRef.current = ok;
       setServerOutdated(!ok);
       clearTimeout(serverCheckTimer);
@@ -772,7 +830,22 @@ const useWebRTCCall = () => {
         ...prev,
         [from]: [
           ...(prev[from] || []),
-          { id: m.id, sender: "them", text: m.message, timestamp: m.timestamp },
+          {
+            id: m.id,
+            sender: "them",
+            text: m.message || "",
+            image: m.image || null,
+            // server "mine" sender ke hisaab se bhejta hai; mere liye ulta
+            replyTo: m.replyTo
+              ? {
+                  id: m.replyTo.id,
+                  text: m.replyTo.text,
+                  kind: m.replyTo.kind,
+                  from: m.replyTo.mine ? "them" : "me",
+                }
+              : null,
+            timestamp: m.timestamp,
+          },
         ],
       }));
       setTyping((prev) => ({ ...prev, [from]: false }));
@@ -791,6 +864,23 @@ const useWebRTCCall = () => {
           setTyping((prev) => ({ ...prev, [senderPublicId]: false }));
         }, 4000);
       }
+    });
+
+    // Samne wale ne mere messages dekh liye -> ticks pink
+    socket.on("messages-seen", ({ byPublicId, ids }) => {
+      const seen = new Set(ids || []);
+      setMessages((prev) => {
+        const list = prev[byPublicId];
+        if (!list) return prev;
+        return {
+          ...prev,
+          [byPublicId]: list.map((m) =>
+            m.sender === "me" && seen.has(m.id) && m.status !== "failed"
+              ? { ...m, status: "seen" }
+              : m
+          ),
+        };
+      });
     });
 
     socket.on("message-sent-ack", ({ targetPublicId, clientId }) => {

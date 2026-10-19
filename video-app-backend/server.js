@@ -23,7 +23,7 @@ const METERED_API_KEY = process.env.METERED_API_KEY || "YOUR_METERED_API_KEY";
 app.use(express.static(path.join(__dirname, "public")));
 
 // Deploy check: browser me <backend-url>/version kholo. {"chat":true} aaye to naya code live hai.
-app.get("/version", (req, res) => res.json({ chat: true, version: 3, friends: true }));
+app.get("/version", (req, res) => res.json({ chat: true, version: 4, friends: true, images: true }));
 
 // Dynamic TURN credentials API endpoint
 // app.get("/api/turn-credentials", async (req, res) => {
@@ -99,6 +99,9 @@ async function startServer() {
         origin: "*",
         methods: ["GET", "POST"],
       },
+      // Photos base64 me aati hain (client unhe ~700KB se chhota karke bhejta hai).
+      // Default limit 1MB hai; isse zyada ka packet aaye to socket disconnect ho jata hai.
+      maxHttpBufferSize: 3e6,
     });
 
     setupSocket(io);

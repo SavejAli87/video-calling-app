@@ -37,3 +37,55 @@ export const dayLabel = (ts) => {
 };
 
 export const isSameDay = (a, b) => dayLabel(a) === dayLabel(b);
+
+/**
+ * Photo ko bhejne se pehle chhota karo: max 1280px, JPEG, ~700KB se kam.
+ * (Server limit se bahut neeche, taaki slow network par bhi chale.)
+ * Reject hota hai (readable message ke saath) agar file image nahi hai ya padhi nahi ja sakti.
+ */
+export const fileToCompressedDataUrl = (file, { maxDim = 1280, maxChars = 700000 } = {}) =>
+  new Promise((resolve, reject) => {
+    if (!file || !file.type || !file.type.startsWith("image/")) {
+      return reject(new Error("Please choose an image file."));
+    }
+    if (file.size > 25 * 1024 * 1024) {
+      return reject(new Error("That photo is too large (max 25 MB)."));
+    }
+
+    const url = URL.createObjectURL(file);
+    const img = new Image();
+
+    img.onload = () => {
+      URL.revokeObjectURL(url);
+      try {
+        const w = img.naturalWidth;
+        const h = img.naturalHeight;
+        let scale = Math.min(1, maxDim / Math.max(w, h));
+
+        for (let attempt = 0; attempt < 6; attempt++) {
+          const canvas = document.createElement("canvas");
+          canvas.width = Math.max(1, Math.round(w * scale));
+          canvas.height = Math.max(1, Math.round(h * scale));
+          const ctx = canvas.getContext("2d");
+          ctx.fillStyle = "#ffffff"; // PNG transparency JPEG me kaali na ho
+          ctx.fillRect(0, 0, canvas.width, canvas.height);
+          ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
+
+          for (const quality of [0.82, 0.7, 0.58]) {
+            const out = canvas.toDataURL("image/jpeg", quality);
+            if (out.length <= maxChars) return resolve(out);
+          }
+          scale *= 0.75;
+        }
+        reject(new Error("Couldn't shrink that photo enough to send."));
+      } catch {
+        reject(new Error("Couldn't read that photo."));
+      }
+    };
+
+    img.onerror = () => {
+      URL.revokeObjectURL(url);
+      reject(new Error("Couldn't read that photo."));
+    };
+    img.src = url;
+  });

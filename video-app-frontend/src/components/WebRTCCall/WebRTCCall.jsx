@@ -64,6 +64,7 @@ const WebRTCCall = () => {
       />
 
       <ChatPanel
+        key={chatTarget?.publicId || "none"}
         target={chatTarget}
         messages={chatTarget ? call.messages[chatTarget.publicId] : []}
         typing={chatTarget ? !!call.typing[chatTarget.publicId] : false}
